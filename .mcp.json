@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "afl": {
+      "type": "http",
+      "url": "${AFL_API_BASE_URL:-https://app.agentsforlife.org}/api/mcp/hub",
+      "headers": {
+        "Authorization": "Bearer ${AFL_TOKEN}"
+      }
+    }
+  }
+}

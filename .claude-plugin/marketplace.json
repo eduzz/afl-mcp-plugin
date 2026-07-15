@@ -1,0 +1,15 @@
+{
+  "name": "afl",
+  "owner": {
+    "name": "Eduzz / Agents for Life"
+  },
+  "description": "Marketplace interno do AFL — conectores e skills para o Claude Code.",
+  "plugins": [
+    {
+      "name": "afl-mcp",
+      "source": "./",
+      "description": "AFL MCP server (agentes + tools de leitura via /api/mcp/hub) + skill afl-hub de operação.",
+      "version": "1.0.0"
+    }
+  ]
+}
