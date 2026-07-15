@@ -1,6 +1,6 @@
 {
   "name": "afl-mcp",
-  "description": "Agents for Life — conector MCP para o Claude Code (agentes + tools de leitura via /api/mcp/hub).",
-  "version": "1.0.0",
+  "description": "Agents for Life — conector MCP para o Claude Code (agentes + tools de leitura via /api/mcp/hub), autenticado por OAuth no browser.",
+  "version": "1.1.0",
   "author": { "name": "Eduzz / Agents for Life" }
 }

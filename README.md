@@ -2,34 +2,28 @@
 
 Plugin do **Claude Code** que adiciona o servidor MCP do **Agents for Life** (hub `/api/mcp/hub`) — dá acesso, dentro do Claude Code, aos agentes e às tools de leitura (`list_agents`, `chat_with_agent`, `jira_search`, `hubspot_search`, `notion_query`, `search_knowledge_base`, `query_database`).
 
-> O plugin só empacota a **configuração** (não o token). Cada usuário usa a **própria** API key (token por-usuário) — o token **nunca** é embutido no plugin. Guia completo do hub: [`afl-hub-mcp-handbook.md`](https://github.com/eduzz/labzz_afl/blob/main/docs/afl-hub-mcp-handbook.md).
-
 Instalar o plugin entrega duas coisas de uma vez:
-- **MCP server `afl`** (`.mcp.json`) — as tools do hub (`list_agents`, `chat_with_agent`, `jira_search`, etc.).
+- **MCP server `afl`** (`.mcp.json`) — as tools do hub.
 - **Skill `afl-hub`** (`skills/afl-hub/SKILL.md`) — ensina o Claude Code a **operar** essas tools em capacidade máxima (modelo service-agent, qual tool para cada caso, JQL válido, queries específicas no KB, multi-turn, tratamento de erro).
 
-## Pré-requisito: sua API key
+> Guia completo do hub: [`afl-hub-mcp-handbook.md`](https://github.com/eduzz/labzz_afl/blob/main/docs/afl-hub-mcp-handbook.md).
 
-1. Acesse **`/profile`** no AFL → seção **API Keys** → **Nova chave**.
-2. Selecione os escopos (`agents:chat` e/ou `tools:read`) e copie a chave (`afl_live_...`) — ela só aparece uma vez.
-3. Exporte no ambiente (persista no `~/.zshrc` / `~/.bash_profile`):
-   ```bash
-   export AFL_TOKEN="afl_live_..."
-   # Opcional (default = produção): apontar para homolog
-   # export AFL_API_BASE_URL="https://app-sandbox.agentsforlife.org"
-   ```
+## Autenticação: OAuth no browser (sem colar token)
+
+O plugin usa **OAuth**. Você **não** cria nem cola API key: na primeira vez que o Claude Code usar o servidor `afl`, ele abre o **browser** para você fazer login no AFL; o token fica salvo no keychain do sistema. O AFL faz **Dynamic Client Registration** automaticamente — nada a configurar.
 
 ## Instalar
 
 ```bash
-# Teste local (a partir da raiz do repo):
-claude --plugin-dir ./afl-mcp-plugin
+# Via marketplace (recomendado):
+/plugin marketplace add eduzz/afl-mcp-plugin
+/plugin install afl-mcp@afl
 
-# Ou publique este diretório num marketplace/repo e instale por nome:
-#   claude plugin install <org>/afl-mcp-plugin
+# Teste local (a partir de um clone deste repo):
+claude --plugin-dir .
 ```
 
-Depois, no Claude Code, rode `/mcp` para confirmar que o servidor `afl` conectou.
+Depois, no Claude Code: rode `/mcp` — o servidor `afl` aparece; na primeira chamada de tool o browser abre para o login. Verifique também `/skill list` (deve listar `afl-mcp:afl-hub`).
 
 ## Configuração incluída (`.mcp.json`)
 
@@ -38,16 +32,23 @@ Depois, no Claude Code, rode `/mcp` para confirmar que o servidor `afl` conectou
   "mcpServers": {
     "afl": {
       "type": "http",
-      "url": "${AFL_API_BASE_URL:-https://app.agentsforlife.org}/api/mcp/hub",
-      "headers": { "Authorization": "Bearer ${AFL_TOKEN}" }
+      "url": "${AFL_API_BASE_URL:-https://app.agentsforlife.org}/api/mcp/hub"
     }
   }
 }
 ```
 
-- `${AFL_TOKEN}` — sua API key (obrigatória).
-- `${AFL_API_BASE_URL}` — base URL; default produção. Sobrescreva para homolog.
+- Sem header/token: o Claude Code detecta o `WWW-Authenticate` do hub, descobre o Authorization Server (`/.well-known/oauth-authorization-server`), registra-se via DCR e faz o fluxo `authorization_code` + PKCE no browser.
+- `${AFL_API_BASE_URL}` — base URL; default produção. Sobrescreva para homolog: `export AFL_API_BASE_URL="https://app-sandbox.agentsforlife.org"`.
 
-## Futuro (OAuth)
+## Requisito de ambiente
 
-Quando o AFL expuser OAuth/OIDC (planejado), o `.mcp.json` troca o header por um bloco `oauth` e o login passa a ser via browser — **sem** criar/colar token. Este plugin será atualizado para essa versão.
+O login OAuth exige o AFL com o **Authorization Server (Fase 2)** publicado no ambiente-alvo (prod por default). Se o ambiente ainda não tiver OAuth, use o modo de **token estático** manualmente (fora do plugin), criando uma API key em `/profile` → API Keys e:
+
+```bash
+claude mcp add --transport http afl \
+  https://app.agentsforlife.org/api/mcp/hub \
+  --header "Authorization: Bearer afl_live_SEU_TOKEN" --scope user
+```
+
+(Ver o handbook para detalhes.)

@@ -78,11 +78,13 @@ you to specify the source — surface that to the user.
 
 ## Auth, scopes, ownership
 
-- Auth is the token configured in the `afl` MCP server (scopes typically
-  `agents:chat` + `tools:read`). `missing scope ...` → the token lacks that scope
-  (recreate the key in AFL `/profile` → API Keys with the needed scopes).
-- You can only use agents you own or that belong to your token's organization. One
-  token = one org context (+ agents you created).
+- Auth is OAuth (browser login on first use; token stored in the OS keychain). The
+  granted scopes (typically `agents:chat` + `tools:read`) gate the tools —
+  `missing scope ...` means the session lacks that scope. (A static API key via
+  `claude mcp add --header "Authorization: Bearer afl_live_..."` is the fallback
+  when OAuth isn't yet available in the target environment.)
+- You can only use agents you own or that belong to your session's organization. One
+  session = one org context (+ agents you created).
 
 ## Known limitations (current)
 

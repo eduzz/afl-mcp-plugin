@@ -8,8 +8,8 @@
     {
       "name": "afl-mcp",
       "source": "./",
-      "description": "AFL MCP server (agentes + tools de leitura via /api/mcp/hub) + skill afl-hub de operação.",
-      "version": "1.0.0"
+      "description": "AFL MCP server (agentes + tools de leitura) + skill afl-hub. Login OAuth no browser (sem colar token).",
+      "version": "1.1.0"
     }
   ]
 }
