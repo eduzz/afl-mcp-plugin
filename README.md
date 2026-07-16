@@ -1,54 +1,98 @@
-# afl-mcp-plugin
+# AFL para o Claude Code
 
-Plugin do **Claude Code** que adiciona o servidor MCP do **Agents for Life** (hub `/api/mcp/hub`) — dá acesso, dentro do Claude Code, aos agentes e às tools de leitura (`list_agents`, `chat_with_agent`, `jira_search`, `hubspot_search`, `notion_query`, `search_knowledge_base`, `query_database`).
+Este plugin conecta o **Agents for Life (AFL)** ao **Claude Code**. Depois de instalar, o Claude Code consegue conversar com os seus agentes do AFL e consultar os dados ligados a eles (Jira, HubSpot, Notion, base de conhecimento e bancos de dados) — tudo direto do seu terminal ou editor, sem sair para o navegador.
 
-Instalar o plugin entrega duas coisas de uma vez:
-- **MCP server `afl`** (`.mcp.json`) — as tools do hub.
-- **Skill `afl-hub`** (`skills/afl-hub/SKILL.md`) — ensina o Claude Code a **operar** essas tools em capacidade máxima (modelo service-agent, qual tool para cada caso, JQL válido, queries específicas no KB, multi-turn, tratamento de erro).
+> **Nunca usou o Claude Code?** É a ferramenta de linha de comando da Anthropic (`claude`). Instale-a primeiro seguindo o guia oficial em https://claude.com/claude-code e volte aqui.
 
-> Guia completo do hub: [`afl-hub-mcp-handbook.md`](https://github.com/eduzz/labzz_afl/blob/main/docs/afl-hub-mcp-handbook.md).
+## O que você ganha ao instalar
 
-## Autenticação: OAuth no browser (sem colar token)
+O plugin instala duas coisas de uma vez:
 
-O plugin usa **OAuth**. Você **não** cria nem cola API key: na primeira vez que o Claude Code usar o servidor `afl`, ele abre o **browser** para você fazer login no AFL; o token fica salvo no keychain do sistema. O AFL faz **Dynamic Client Registration** automaticamente — nada a configurar.
+- **Acesso aos seus agentes e dados do AFL** — um conjunto de ferramentas que o Claude Code passa a poder usar: listar seus agentes, conversar com eles, buscar na base de conhecimento e consultar Jira / HubSpot / Notion / bancos ligados ao agente.
+- **Um guia embutido** que ensina o Claude Code a usar essas ferramentas do jeito certo — você não precisa decorar comando nenhum, é só pedir em linguagem natural.
 
-## Instalar
+Exemplos do que dá para pedir depois de instalar:
 
-```bash
-# Via marketplace (recomendado):
+- *"Liste meus agentes do AFL."*
+- *"Pergunte ao meu agente financeiro qual foi o faturamento do último mês."*
+- *"Busque no Jira as tarefas em andamento do projeto X."*
+- *"Procure na base de conhecimento do meu agente de suporte a política de reembolso."*
+
+## Antes de começar
+
+Você precisa de:
+
+1. **Claude Code instalado** (o comando `claude` funcionando no terminal).
+2. **Uma conta no AFL** — a mesma que você usa em https://app.agentsforlife.org.
+
+Só isso. Você **não** precisa criar nem colar nenhuma senha ou token: o login é feito pelo navegador (veja abaixo).
+
+## Instalação (2 comandos)
+
+Abra o Claude Code e digite:
+
+```
 /plugin marketplace add eduzz/afl-mcp-plugin
 /plugin install afl-mcp@afl
-
-# Teste local (a partir de um clone deste repo):
-claude --plugin-dir .
 ```
 
-Depois, no Claude Code: rode `/mcp` — o servidor `afl` aparece; na primeira chamada de tool o browser abre para o login. Verifique também `/skill list` (deve listar `afl-mcp:afl-hub`).
+Pronto. Na primeira vez que você pedir algo que use o AFL, o Claude Code vai **abrir o seu navegador** para você fazer login na sua conta do AFL. Depois disso, o acesso fica salvo com segurança na sua máquina e você não precisa logar de novo.
 
-## Configuração incluída (`.mcp.json`)
+## Como saber se deu certo
 
-```json
-{
-  "mcpServers": {
-    "afl": {
-      "type": "http",
-      "url": "${AFL_API_BASE_URL:-https://app.agentsforlife.org}/api/mcp/hub"
-    }
-  }
-}
+No Claude Code, rode:
+
+```
+/mcp
 ```
 
-- Sem header/token: o Claude Code detecta o `WWW-Authenticate` do hub, descobre o Authorization Server (`/.well-known/oauth-authorization-server`), registra-se via DCR e faz o fluxo `authorization_code` + PKCE no browser.
-- `${AFL_API_BASE_URL}` — base URL; default produção. Sobrescreva para homolog: `export AFL_API_BASE_URL="https://app-sandbox.agentsforlife.org"`.
+Você deve ver o servidor **`afl`** na lista. Da primeira vez que você usar uma ferramenta dele, o navegador abre para o login — depois aparece como conectado.
 
-## Requisito de ambiente
+Para conferir o guia embutido, rode:
 
-O login OAuth exige o AFL com o **Authorization Server (Fase 2)** publicado no ambiente-alvo (prod por default). Se o ambiente ainda não tiver OAuth, use o modo de **token estático** manualmente (fora do plugin), criando uma API key em `/profile` → API Keys e:
+```
+/skill list
+```
 
-```bash
+Deve aparecer `afl-mcp:afl-hub`.
+
+## Como usar no dia a dia
+
+Não há comando especial: basta conversar com o Claude Code em português. Quando você mencionar seus agentes, o AFL, ou pedir para buscar algo que está no AFL, ele usa as ferramentas automaticamente. Por exemplo:
+
+> **Você:** Resuma os últimos chamados abertos no HubSpot pelo meu agente de suporte.
+>
+> **Claude Code:** *(lista seus agentes, escolhe o de suporte, busca no HubSpot e resume)*
+
+Se algo não funcionar, o Claude Code costuma dizer exatamente o que falta (por exemplo, que você precisa escolher qual agente usar).
+
+## Perguntas frequentes
+
+**Preciso criar uma chave/token?**
+Não. O login é pelo navegador, na sua conta do AFL. É só clicar.
+
+**O plugin pode alterar meus dados?**
+Não. Hoje ele é **somente leitura** — consulta e conversa, mas não cria nem edita nada (não abre chamados, não envia e-mails, etc.).
+
+**Quais dados ele acessa?**
+Apenas os agentes que são seus (ou da sua organização) e as fontes de dados ligadas a esses agentes. Nada além do que você já vê no AFL.
+
+**A janela de login não abriu / expirou.**
+Rode `/mcp` no Claude Code e acione o servidor `afl` de novo — ele reabre o navegador para você logar.
+
+## Alternativa avançada: conectar com uma chave de API
+
+O modo recomendado é o login pelo navegador acima. Se você preferir usar uma chave fixa (por exemplo, em um ambiente sem navegador), gere uma chave no AFL em **Perfil → API Keys** e rode:
+
+```
 claude mcp add --transport http afl \
   https://app.agentsforlife.org/api/mcp/hub \
-  --header "Authorization: Bearer afl_live_SEU_TOKEN" --scope user
+  --header "Authorization: Bearer SUA_CHAVE" --scope user
 ```
 
-(Ver o handbook para detalhes.)
+Trate essa chave como uma senha — não a compartilhe nem a versione.
+
+## Precisa de mais detalhes?
+
+O guia completo (todas as ferramentas, exemplos avançados e resolução de problemas) está em
+[**afl-hub-mcp-handbook.md**](https://github.com/eduzz/labzz_afl/blob/main/docs/afl-hub-mcp-handbook.md).
