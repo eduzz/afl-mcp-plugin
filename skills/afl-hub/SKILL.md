@@ -19,7 +19,10 @@ execute. There is no generic/global execution — always pick an agent first.
 
 ## Golden workflow (always)
 
-1. **`mcp__afl__list_agents`** (no args) → returns `{ agents: [{ id, name, description }] }`.
+1. **`mcp__afl__list_agents`** (no args) → returns `{ agents: [{ id, name, description,
+   type, organizationId, organizationName }] }` — personal agents plus the org agents
+   your RBAC reaches (`type: "organizational"`; `organizationId`/`organizationName`
+   null for personal ones).
 2. **Pick the agent whose `description` matches the domain** of the task (e.g. a
    "Financeiro" agent for finance, a "Jira"/"Labzz" agent for Jira, an "Assistente"
    for general/Microsoft tasks). When ambiguous, ask the user which agent to use.
@@ -83,8 +86,10 @@ you to specify the source — surface that to the user.
   `missing scope ...` means the session lacks that scope. (A static API key via
   `claude mcp add --header "Authorization: Bearer afl_live_..."` is the fallback
   when OAuth isn't yet available in the target environment.)
-- You can only use agents you own or that belong to your session's organization. One
-  session = one org context (+ agents you created).
+- You can use agents you own, agents of your session's organization, and (since
+  2026-07-17) any org agent your RBAC reaches (super-admin, or direct/group/container
+  permission) — `list_agents` includes those with `type: "organizational"` +
+  `organizationId`/`organizationName`, and execution applies the same RBAC.
 
 ## Known limitations (current)
 
