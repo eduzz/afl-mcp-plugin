@@ -41,6 +41,10 @@ Two modes — choose deliberately:
   answer. Use for open-ended questions, analysis, summaries, multi-step tasks, or
   when you don't know which underlying source has the answer. For a follow-up in the
   same thread, reuse the `conversationId` returned in the result `_meta`.
+  **Long-running calls are supported** (the server sends transport keepalives and
+  MCP progress notifications since 2026-07-17): a call that takes minutes will NOT
+  drop. Client harnesses may move a >120s call to a background task and deliver the
+  result via notification — that is normal; wait for it instead of retrying.
 
 - **Deterministic structured data** → the per-provider read tools (return raw JSON,
   no LLM in the middle, cheaper/faster):
@@ -63,6 +67,39 @@ Two modes — choose deliberately:
 The read tools **auto-resolve** the provider's source from the agent's connections.
 If an agent has more than one source of a provider, the tool returns an error asking
 you to specify the source — surface that to the user.
+
+## Bulk/tabular extractions (emails, large listings, spreadsheet exports)
+
+When the user wants a **bulk listing or a spreadsheet** built from a connected
+source (e.g. "all emails with sender/date/subject for a period", "export X to a
+spreadsheet"), do NOT let the agent enumerate items one by one — inline compilation
+through the agent's LLM context **truncates, duplicates, and can fabricate rows**.
+Instead, instruct it explicitly in the `chat_with_agent` message to use the
+deterministic tabular engine:
+
+> Use a ferramenta `analisar_planilha` sobre a fonte <nome da fonte> com
+> `source_filter: "<query nativa>"` e `formato_saida: "documento"`. NÃO liste
+> itens um a um.
+
+- **Gmail sources are analyzable tabular sources** (since 2026-07-17): the engine
+  materializes the whole mailbox server-side (sender, date, subject, labels…).
+  `source_filter` takes a native Gmail query, e.g.
+  `in:inbox after:2026/05/01 before:2026/07/18`.
+- Gotcha: Gmail `after:`/`before:` filter by **internalDate**. Imported/migrated
+  mailboxes stamp the import date on old mail, so date distributions can spike on
+  the migration day — flag it to the user rather than assuming corruption.
+- Other tabular sources (Sheets, Excel/M365, Notion databases, Jira, HubSpot, SQL)
+  go through the same engine.
+
+## Files returned by agents
+
+Agents return generated files as `[AFL_FILE_URL:/api/documents/d/<token>|<filename>]`.
+The URL is relative — prepend the environment base URL (prod:
+`https://app.agentsforlife.org`) to download (works with `curl`, token-signed).
+**Always validate a generated artifact before handing it to the user** (row count,
+per-period distribution, no placeholder domains like `exemplo.com`): if the agent
+compiled the data inline instead of using the deterministic engine, the file may be
+truncated or fabricated even when the reply sounds confident.
 
 ## Getting the most out of it
 
@@ -93,7 +130,9 @@ you to specify the source — surface that to the user.
 
 ## Known limitations (current)
 
-- **Read-only** — no write tools (create issue, send email, etc.) yet.
+- **Read-only** — no write tools (create issue, send email, etc.) yet. An expansion
+  of the read-tool set (Gmail/Drive/Sheets/Calendar, Outlook/OneDrive, Slack,
+  GitHub, web search, Databricks, …) is mapped but not shipped yet.
 - **Org Jira** may return "Integração Jira não configurada" (pending an integration
   fix). Personal Jira, knowledge base, HubSpot, Notion, and chat work.
 - No path versioning yet; the contract may evolve.
