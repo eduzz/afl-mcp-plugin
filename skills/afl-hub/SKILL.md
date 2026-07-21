@@ -2,27 +2,29 @@
 name: afl-hub
 description: >-
   Operate the Agents for Life (AFL) hub via its MCP server (`mcp__afl__*` tools):
-  talk to AFL agents and read data connected to them (Jira, HubSpot, Notion,
-  knowledge base, databases). Use whenever the user wants to ask/act through their
-  AFL agents, search an AFL agent's knowledge base, look up Jira/HubSpot/Notion or
-  database data that lives in AFL, or mentions "AFL", "Agents for Life", "hub",
-  "meu agente"/"my agent", or an agent by name. Requires the `afl` MCP server
-  configured (`claude mcp list` → afl ✔ Connected).
+  talk to AFL agents, read data connected to them (Jira, HubSpot, Notion,
+  knowledge base, databases), write/act through them (create/edit records, with
+  confirmation for destructive ops), and run org squads and automations. Use
+  whenever the user wants to ask/act through their AFL agents, search an AFL
+  agent's knowledge base, look up or mutate Jira/HubSpot/Notion or database data
+  that lives in AFL, trigger a squad/automation, or mentions "AFL", "Agents for
+  Life", "hub", "meu agente"/"my agent", or an agent by name. Requires the `afl`
+  MCP server configured (`claude mcp list` → afl ✔ Connected).
 ---
 
 # AFL Hub — operating the MCP at maximum capability
 
-The `afl` MCP server exposes AFL's capabilities as tools. **Everything runs in the
-context of a real AGENT you choose** (the service-agent model): the chosen agent
-carries the organization, connected data sources, and OAuth credentials used to
-execute. There is no generic/global execution — always pick an agent first.
+The `afl` MCP server exposes AFL's capabilities as **tools**, plus MCP **resources**
+(skill discovery — browse the platform skill catalog and an agent's enabled skills)
+and MCP **prompts** (ready-made instructions to drive an agent to apply a skill).
+**Everything runs in the context of a real AGENT you choose** (the service-agent
+model): the chosen agent carries the organization, connected data sources, and OAuth
+credentials used to execute. There is no generic/global execution — always pick an
+agent first.
 
 ## Golden workflow (always)
 
-1. **`mcp__afl__list_agents`** (no args) → returns `{ agents: [{ id, name, description,
-   type, organizationId, organizationName }] }` — personal agents plus the org agents
-   your RBAC reaches (`type: "organizational"`; `organizationId`/`organizationName`
-   null for personal ones).
+1. **`mcp__afl__list_agents`** (no args) → returns `{ agents: [{ id, name, description }] }`.
 2. **Pick the agent whose `description` matches the domain** of the task (e.g. a
    "Financeiro" agent for finance, a "Jira"/"Labzz" agent for Jira, an "Assistente"
    for general/Microsoft tasks). When ambiguous, ask the user which agent to use.
@@ -41,10 +43,6 @@ Two modes — choose deliberately:
   answer. Use for open-ended questions, analysis, summaries, multi-step tasks, or
   when you don't know which underlying source has the answer. For a follow-up in the
   same thread, reuse the `conversationId` returned in the result `_meta`.
-  **Long-running calls are supported** (the server sends transport keepalives and
-  MCP progress notifications since 2026-07-17): a call that takes minutes will NOT
-  drop. Client harnesses may move a >120s call to a background task and deliver the
-  result via notification — that is normal; wait for it instead of retrying.
 
 - **Deterministic structured data** → the per-provider read tools (return raw JSON,
   no LLM in the middle, cheaper/faster):
@@ -68,38 +66,68 @@ The read tools **auto-resolve** the provider's source from the agent's connectio
 If an agent has more than one source of a provider, the tool returns an error asking
 you to specify the source — surface that to the user.
 
-## Bulk/tabular extractions (emails, large listings, spreadsheet exports)
+### Write & action tools (Fase 3)
 
-When the user wants a **bulk listing or a spreadsheet** built from a connected
-source (e.g. "all emails with sender/date/subject for a period", "export X to a
-spreadsheet"), do NOT let the agent enumerate items one by one — inline compilation
-through the agent's LLM context **truncates, duplicates, and can fabricate rows**.
-Instead, instruct it explicitly in the `chat_with_agent` message to use the
-deterministic tabular engine:
+The hub is **no longer read-only**. Beyond the reads above there are now write and
+orchestration tools, each gated by its own scope (`missing scope ...` = the session
+lacks it — surface verbatim):
 
-> Use a ferramenta `analisar_planilha` sobre a fonte <nome da fonte> com
-> `source_filter: "<query nativa>"` e `formato_saida: "documento"`. NÃO liste
-> itens um a um.
+- **Write (~40 tools, scope `tools:write`)** — one MCP tool per native write executor
+  (e.g. create/update issues, send messages, mutate provider records). Each takes an
+  `agentId` plus the native tool's params. **Destructive actions return a
+  `confirmationId` instead of executing** — call `mcp__afl__confirm_action`
+  `{ confirmationId }` to actually run it. Per-source `allow_agent_write` still gates
+  whether a source accepts writes. Don't enumerate all ~40 from memory; discover them
+  with `listTools` (or `/mcp`) and consult the handbook.
+- **`mcp__afl__execute_tool`** (scope-gated) — agent-less **org** tool call: run a
+  named tool directly in the token's organization context without picking an agent.
+  Use only when you have no suitable agent carrier and know the exact `tool_name`.
+- **`mcp__afl__execute_in_background`** (`tools:write`) → returns a `task_id`; fetch it
+  later with **`mcp__afl__get_task_result`** `{ task_id }` (`tools:read`). Use for
+  long/multi-step work so you don't block.
+- **Squads** — `mcp__afl__run_squad` (scope `squads:run`) fires an org squad
+  asynchronously → returns a `run_id`; poll **`mcp__afl__get_squad_run`**
+  `{ run_id }` (scope `squads:read`). `mcp__afl__list_squads` (`squads:read`) lists
+  the org squads you can trigger. Squad tools require a token bound to an organization.
+- **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
+  automation (fire-and-forget) → `{ queued, correlationId }`; read history with
+  **`mcp__afl__get_automation_result`** (scope `automations:read`).
+  `mcp__afl__list_automations` (`automations:read`) lists the visible automations.
 
-- **Gmail sources are analyzable tabular sources** (since 2026-07-17): the engine
-  materializes the whole mailbox server-side (sender, date, subject, labels…).
-  `source_filter` takes a native Gmail query, e.g.
-  `in:inbox after:2026/05/01 before:2026/07/18`.
-- Gotcha: Gmail `after:`/`before:` filter by **internalDate**. Imported/migrated
-  mailboxes stamp the import date on old mail, so date distributions can spike on
-  the migration day — flag it to the user rather than assuming corruption.
-- Other tabular sources (Sheets, Excel/M365, Notion databases, Jira, HubSpot, SQL)
-  go through the same engine.
+**Confirm before destructive writes:** when a write returns a `confirmationId`, tell
+the user what will change and only call `confirm_action` after they agree (or the
+user's request was already an explicit, unambiguous instruction to do it).
 
-## Files returned by agents
+## Resources & prompts (skill discovery)
 
-Agents return generated files as `[AFL_FILE_URL:/api/documents/d/<token>|<filename>]`.
-The URL is relative — prepend the environment base URL (prod:
-`https://app.agentsforlife.org`) to download (works with `curl`, token-signed).
-**Always validate a generated artifact before handing it to the user** (row count,
-per-period distribution, no placeholder domains like `exemplo.com`): if the agent
-compiled the data inline instead of using the deterministic engine, the file may be
-truncated or fabricated even when the reply sounds confident.
+Besides tools, the `afl` server exposes MCP **resources** and **prompts** to discover
+and drive **skills** (modular, opt-in agent capabilities). No new scopes: platform
+resources/prompts need only a valid token; per-agent ones need access to that agent.
+Sampling is not supported.
+
+**Resources** (enumerate with `listResources`, fetch with `readResource <uri>`):
+
+- `afl://skills/platform` — the platform skill catalog **index** (curated, admin-side
+  skills, e.g. the native tools exposed as skills). Read this first to discover what
+  the system can do.
+- `afl://skills/platform/{slug}` — the **full definition** of one platform skill:
+  `description`, `promptInjection`, `toolDefinitions`, `parametersSchema`, and
+  `execution.kind`. Use a `slug` from the index above.
+- `afl://skills/agent/{agentId}` — the skills **enabled on that specific agent**.
+  Needs access to the agent — get the `agentId` from `mcp__afl__list_agents`.
+
+**Prompts** (enumerate with `listPrompts`, invoke with `getPrompt`):
+
+- `use_skill` `{ agentId, skill, request? }` — builds an instruction to apply a
+  specific skill through the agent. A fast way to make an agent use one skill: feed the
+  returned message to `mcp__afl__chat_with_agent`. `skill` is a slug; `request` adds
+  the concrete ask.
+- `discover_agent_skills` `{ agentId }` — lists the agent's skills and helps pick the
+  right one for a task.
+
+**Guidance:** read `afl://skills/platform` to learn what capabilities exist; read
+`afl://skills/agent/{id}` to see a given agent's enabled skills; then use the
+`use_skill` prompt to invoke one via `chat_with_agent`.
 
 ## Getting the most out of it
 
@@ -119,22 +147,27 @@ truncated or fabricated even when the reply sounds confident.
 ## Auth, scopes, ownership
 
 - Auth is OAuth (browser login on first use; token stored in the OS keychain). The
-  granted scopes (typically `agents:chat` + `tools:read`) gate the tools —
-  `missing scope ...` means the session lacks that scope. (A static API key via
-  `claude mcp add --header "Authorization: Bearer afl_live_..."` is the fallback
-  when OAuth isn't yet available in the target environment.)
-- You can use agents you own, agents of your session's organization, and (since
-  2026-07-17) any org agent your RBAC reaches (super-admin, or direct/group/container
-  permission) — `list_agents` includes those with `type: "organizational"` +
-  `organizationId`/`organizationName`, and execution applies the same RBAC.
+  AFL is the OIDC Authorization Server (discovery + PKCE + Dynamic Client
+  Registration), so `claude mcp add --transport http afl <hub-url>` **without**
+  `--header` triggers the browser login flow — no token to paste. A static API key
+  (`afl_live_...`) via `claude mcp add --header "Authorization: Bearer afl_live_..."`
+  is the fallback for headless/backend-to-backend use.
+- **Scopes gate each tool** (`missing scope ...` = the session lacks it). OAuth grants
+  `agents:chat` + `tools:read` by default; the fuller set is `agents:chat`,
+  `tools:read`, `tools:write`, `squads:run`, `squads:read`, `automations:run`,
+  `automations:read` (or `*`). Reads/chat need `tools:read`/`agents:chat`; writes need
+  `tools:write`; squads/automations need their own scopes. `list_agents` /
+  `list_organizations` need no scope.
+- You can only use agents you own or that belong to your session's organization. One
+  session = one org context (+ agents you created).
 
 ## Known limitations (current)
 
-- **Read-only** — no write tools (create issue, send email, etc.) yet. An expansion
-  of the read-tool set (Gmail/Drive/Sheets/Calendar, Outlook/OneDrive, Slack,
-  GitHub, web search, Databricks, …) is mapped but not shipped yet.
-- **Org Jira** may return "Integração Jira não configurada" (pending an integration
-  fix). Personal Jira, knowledge base, HubSpot, Notion, and chat work.
+- **Writes are opt-in per source** — a write tool only executes if the target data
+  source has `allow_agent_write` enabled; otherwise it's rejected. Destructive actions
+  always route through `confirm_action`.
+- **Squad/automation tools need an org-bound token** (`squads:read` returns nothing
+  useful for a purely personal token).
 - No path versioning yet; the contract may evolve.
 
 ## Reference

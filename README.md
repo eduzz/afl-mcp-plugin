@@ -1,6 +1,6 @@
 # AFL para o Claude Code
 
-Este plugin conecta o **Agents for Life (AFL)** ao **Claude Code**. Depois de instalar, o Claude Code consegue conversar com os seus agentes do AFL e consultar os dados ligados a eles (Jira, HubSpot, Notion, base de conhecimento e bancos de dados) — tudo direto do seu terminal ou editor, sem sair para o navegador.
+Este plugin conecta o **Agents for Life (AFL)** ao **Claude Code**. Depois de instalar, o Claude Code consegue conversar com os seus agentes do AFL, consultar os dados ligados a eles (Jira, HubSpot, Notion, base de conhecimento e bancos de dados), **agir por eles** (criar/editar registros, com confirmação nas ações destrutivas) e ainda **disparar squads e automações** da sua organização — tudo direto do seu terminal ou editor, sem sair para o navegador.
 
 > **Nunca usou o Claude Code?** É a ferramenta de linha de comando da Anthropic (`claude`). Instale-a primeiro seguindo o guia oficial em https://claude.com/claude-code e volte aqui.
 
@@ -8,7 +8,12 @@ Este plugin conecta o **Agents for Life (AFL)** ao **Claude Code**. Depois de in
 
 O plugin instala duas coisas de uma vez:
 
-- **Acesso aos seus agentes e dados do AFL** — um conjunto de ferramentas que o Claude Code passa a poder usar: listar seus agentes, conversar com eles, buscar na base de conhecimento e consultar Jira / HubSpot / Notion / bancos ligados ao agente.
+- **Acesso aos seus agentes e dados do AFL** — um conjunto amplo de ferramentas que o Claude Code passa a poder usar:
+  - **Leitura:** listar seus agentes, conversar com eles, buscar na base de conhecimento e consultar Jira / HubSpot / Notion / bancos ligados ao agente.
+  - **Escrita (novo):** ~40 ferramentas de ação (criar/editar registros nas integrações do agente). Ações destrutivas pedem uma confirmação explícita antes de executar.
+  - **Squads e automações (novo):** disparar squads e automações da sua organização e acompanhar o resultado.
+  - **Tarefas longas (novo):** rodar uma tarefa em segundo plano e buscar o resultado depois.
+  - **Descoberta de skills (novo):** listar e ler as skills do sistema e as que estão habilitadas em cada agente, e usar prompts prontos (como `use_skill`) para acionar uma skill específica pelo seu agente.
 - **Um guia embutido** que ensina o Claude Code a usar essas ferramentas do jeito certo — você não precisa decorar comando nenhum, é só pedir em linguagem natural.
 
 Exemplos do que dá para pedir depois de instalar:
@@ -17,6 +22,8 @@ Exemplos do que dá para pedir depois de instalar:
 - *"Pergunte ao meu agente financeiro qual foi o faturamento do último mês."*
 - *"Busque no Jira as tarefas em andamento do projeto X."*
 - *"Procure na base de conhecimento do meu agente de suporte a política de reembolso."*
+- *"Crie um card no Jira do projeto X pelo meu agente."* (ação de escrita — o Claude confirma antes)
+- *"Dispare o squad de onboarding da minha organização e me avise o resultado."*
 
 ## Antes de começar
 
@@ -72,10 +79,13 @@ Se algo não funcionar, o Claude Code costuma dizer exatamente o que falta (por 
 Não. O login é pelo navegador, na sua conta do AFL. É só clicar.
 
 **O plugin pode alterar meus dados?**
-Não. Hoje ele é **somente leitura** — consulta e conversa, mas não cria nem edita nada (não abre chamados, não envia e-mails, etc.).
+Pode, se você pedir. Além de ler e conversar, ele já tem **ferramentas de escrita** (criar/editar registros nas integrações do agente), **squads** e **automações**. Ações destrutivas exigem uma **confirmação explícita** antes de executar, e cada fonte de dados só aceita escrita se estiver habilitada para isso no AFL. O que cada login libera depende dos **escopos** concedidos (leitura, escrita, squads, automações).
 
 **Quais dados ele acessa?**
-Apenas os agentes que são seus (ou da sua organização) e as fontes de dados ligadas a esses agentes. Nada além do que você já vê no AFL.
+Apenas os agentes que são seus (ou da sua organização) e as fontes de dados ligadas a esses agentes. Nada além do que você já vê e pode fazer no AFL.
+
+**O que são as "skills" que ele descobre?**
+São capacidades extras que um agente pode ter habilitadas. O plugin consegue listar as skills do sistema e as ligadas a cada agente e, se você pedir, usar um prompt pronto para o agente aplicar uma delas — tudo dentro do que aquele agente já pode fazer.
 
 **A janela de login não abriu / expirou.**
 Rode `/mcp` no Claude Code e acione o servidor `afl` de novo — ele reabre o navegador para você logar.
