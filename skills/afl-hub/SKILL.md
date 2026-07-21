@@ -4,10 +4,10 @@ description: >-
   Operate the Agents for Life (AFL) hub via its MCP server (`mcp__afl__*` tools):
   talk to AFL agents, read data connected to them (Jira, HubSpot, Notion,
   knowledge base, databases), write/act through them (create/edit records, with
-  confirmation for destructive ops), and run org squads and automations. Use
+  confirmation for destructive ops), and create/run org squads and automations. Use
   whenever the user wants to ask/act through their AFL agents, search an AFL
   agent's knowledge base, look up or mutate Jira/HubSpot/Notion or database data
-  that lives in AFL, trigger a squad/automation, or mentions "AFL", "Agents for
+  that lives in AFL, create/trigger a squad or automation, or mentions "AFL", "Agents for
   Life", "hub", "meu agente"/"my agent", or an agent by name. Requires the `afl`
   MCP server configured (`claude mcp list` → afl ✔ Connected).
 ---
@@ -88,7 +88,12 @@ lacks it — surface verbatim):
 - **Squads** — `mcp__afl__run_squad` (scope `squads:run`) fires an org squad
   asynchronously → returns a `run_id`; poll **`mcp__afl__get_squad_run`**
   `{ run_id }` (scope `squads:read`). `mcp__afl__list_squads` (`squads:read`) lists
-  the org squads you can trigger. Squad tools require a token bound to an organization.
+  the org squads you can trigger. **`mcp__afl__create_squad`** (scope `squads:write`)
+  creates a squad (DAG of steps): pass `name`, `steps[]` and `edges[]` — build steps
+  from `list_agents` (agent-type step `config: { agentId }`); each step needs an `id`
+  you generate so edges can wire them. Born as a **draft** (`is_active=false`) for
+  review in the builder unless you pass `is_active: true`. Squad tools require a
+  token bound to an organization.
 - **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
   automation (fire-and-forget) → `{ queued, correlationId }`; read history with
   **`mcp__afl__get_automation_result`** (scope `automations:read`).
@@ -152,12 +157,15 @@ Sampling is not supported.
   `--header` triggers the browser login flow — no token to paste. A static API key
   (`afl_live_...`) via `claude mcp add --header "Authorization: Bearer afl_live_..."`
   is the fallback for headless/backend-to-backend use.
-- **Scopes gate each tool** (`missing scope ...` = the session lacks it). OAuth grants
-  `agents:chat` + `tools:read` by default; the fuller set is `agents:chat`,
-  `tools:read`, `tools:write`, `squads:run`, `squads:read`, `automations:run`,
-  `automations:read` (or `*`). Reads/chat need `tools:read`/`agents:chat`; writes need
-  `tools:write`; squads/automations need their own scopes. `list_agents` /
-  `list_organizations` need no scope.
+- **Scopes gate each tool** (`missing scope ...` = the session lacks it). The
+  discovery advertises the full set and the consent screen offers all of them:
+  `agents:chat`, `tools:read`, `tools:write`, `squads:read`, `squads:run`,
+  `squads:write`, `automations:read`, `automations:run` (or `*`). Reads/chat need
+  `tools:read`/`agents:chat`; writes need `tools:write`; squads need their own
+  (`squads:read` to list/read, `squads:run` to fire, `squads:write` to create);
+  automations likewise. `list_agents` / `list_organizations` need no scope. If a
+  squad/create call returns `missing scope squads:write`, re-authorize (or mint an
+  API key) with that scope selected.
 - You can only use agents you own or that belong to your session's organization. One
   session = one org context (+ agents you created).
 
