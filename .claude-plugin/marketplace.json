@@ -8,8 +8,7 @@
     {
       "name": "afl-mcp",
       "source": "./",
-      "description": "AFL MCP server (agentes + tools de leitura/escrita, squads, automações + resources/prompts de skills) + skill afl-hub. Login OAuth no browser (sem colar token).",
-      "version": "1.3.0"
+      "description": "AFL MCP server (agentes + tools de leitura/escrita, squads, automações + resources/prompts de skills) + skill afl-hub. Login OAuth no browser (sem colar token)."
     }
   ]
 }
