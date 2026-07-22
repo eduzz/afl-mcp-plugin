@@ -53,6 +53,11 @@ Two modes — choose deliberately:
   - `mcp__afl__jira_search` `{ agentId, query, project?, maxRows? }` — `query` is
     **JQL** (e.g. `ORDER BY created DESC`, `project = AV AND status = "In Progress"`).
     Never pass natural language as JQL.
+  - `mcp__afl__jira_descobrir` `{ agentId, kind, project_key?, board_id?, issue_key?, query? }`
+    — real Jira metadata: `projects | issue_types | transitions | priorities | boards |
+    sprints | components | versions | users | fields`. Call it BEFORE a Jira write to
+    get the real transition name, issue type, sprint/board id, assignee accountId or
+    `customfield_NNNNN` — never guess them, and don't burn a `chat_with_agent` for it.
   - `mcp__afl__hubspot_search` `{ agentId, objectType, query }` — objectType is
     `contacts | companies | deals | tickets`.
   - `mcp__afl__notion_query` `{ agentId, databaseId?, query? }` — pass `databaseId`
@@ -88,12 +93,17 @@ lacks it — surface verbatim):
 - **Squads** — `mcp__afl__run_squad` (scope `squads:run`) fires an org squad
   asynchronously → returns a `run_id`; poll **`mcp__afl__get_squad_run`**
   `{ run_id }` (scope `squads:read`). `mcp__afl__list_squads` (`squads:read`) lists
-  the org squads you can trigger. **`mcp__afl__create_squad`** (scope `squads:write`)
-  creates a squad (DAG of steps): pass `name`, `steps[]` and `edges[]` — build steps
-  from `list_agents` (agent-type step `config: { agentId }`); each step needs an `id`
-  you generate so edges can wire them. Born as a **draft** (`is_active=false`) for
-  review in the builder unless you pass `is_active: true`. Squad tools require a
-  token bound to an organization.
+  the org squads you can trigger — pass `include_all: true` to also see **drafts**,
+  which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
+  (scope `squads:write`) creates a squad (DAG of steps): pass `name`, `steps[]` and
+  `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`);
+  each step needs an `id` you generate so edges can wire them. Born as a **draft**
+  (`is_active=false`) for review in the builder unless you pass `is_active: true`.
+  To edit one: **`mcp__afl__get_squad`** `{ squad_id }` (`squads:read`) returns the
+  full definition, then **`mcp__afl__update_squad`** (`squads:write`) applies changes
+  — omitted fields keep their value, but `steps`/`edges` are a **full REPLACE**, so
+  resend the whole DAG; `is_active` activates a draft or deactivates a squad. Squad
+  tools require a token bound to an organization.
 - **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
   automation (fire-and-forget) → `{ queued, correlationId }`; read history with
   **`mcp__afl__get_automation_result`** (scope `automations:read`).
@@ -162,7 +172,7 @@ Sampling is not supported.
   `agents:chat`, `tools:read`, `tools:write`, `squads:read`, `squads:run`,
   `squads:write`, `automations:read`, `automations:run` (or `*`). Reads/chat need
   `tools:read`/`agents:chat`; writes need `tools:write`; squads need their own
-  (`squads:read` to list/read, `squads:run` to fire, `squads:write` to create);
+  (`squads:read` to list/read, `squads:run` to fire, `squads:write` to create/edit);
   automations likewise. `list_agents` / `list_organizations` need no scope. If a
   squad/create call returns `missing scope squads:write`, re-authorize (or mint an
   API key) with that scope selected.
