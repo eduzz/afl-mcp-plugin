@@ -77,13 +77,25 @@ The hub is **no longer read-only**. Beyond the reads above there are now write a
 orchestration tools, each gated by its own scope (`missing scope ...` = the session
 lacks it — surface verbatim):
 
-- **Write (~40 tools, scope `tools:write`)** — one MCP tool per native write executor
+- **Write (~46 tools, scope `tools:write`)** — one MCP tool per native write executor
   (e.g. create/update issues, send messages, mutate provider records). Each takes an
   `agentId` plus the native tool's params. **Destructive actions return a
   `confirmationId` instead of executing** — call `mcp__afl__confirm_action`
   `{ confirmationId }` to actually run it. Per-source `allow_agent_write` still gates
-  whether a source accepts writes. Don't enumerate all ~40 from memory; discover them
+  whether a source accepts writes. Don't enumerate all of them from memory; discover them
   with `listTools` (or `/mcp`) and consult the handbook.
+- **Feed the knowledge base** → `mcp__afl__gerenciar_documentos` (`tools:write`)
+  `{ agentId, op: "adicionar", titulo, conteudo? | file_key? | file_url?, nome_arquivo?,
+  is_critical? }`. `conteudo` is already-extracted text; **`file_key`** takes a file
+  exported from another integration (same interchangeable key as `jira_anexar_arquivo`)
+  and **`file_url`** an http(s) file. PDF/DOCX/DOC/TXT/MD are extracted, audio/video
+  (MP3/WAV/M4A/OGG, MP4/WEBM/MOV) is transcribed — then vectorized. It is
+  **asynchronous**: the result comes back `processingStatus: "pending"` and the content
+  is only searchable once processing finishes (check with `op: "listar"`). The format
+  is inferred from the file name, so pass `nome_arquivo` (e.g. `"ata.pdf"`) when the
+  key/URL has no extension. Unsupported formats (e.g. `.xlsx`) are rejected — read the
+  data with the integration's own tool and pass the text as `conteudo`. `op: "remover"`
+  is destructive (goes through `confirm_action`).
 - **`mcp__afl__execute_tool`** (scope-gated) — agent-less **org** tool call: run a
   named tool directly in the token's organization context without picking an agent.
   Use only when you have no suitable agent carrier and know the exact `tool_name`.
