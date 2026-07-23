@@ -4,10 +4,12 @@ description: >-
   Operate the Agents for Life (AFL) hub via its MCP server (`mcp__afl__*` tools):
   talk to AFL agents, read data connected to them (Jira, HubSpot, Notion,
   knowledge base, databases), write/act through them (create/edit records, with
-  confirmation for destructive ops), and create/run org squads and automations. Use
+  confirmation for destructive ops), manage your agents and skills (create/edit/delete,
+  and enable/disable a skill on an agent), and create/run org squads and automations. Use
   whenever the user wants to ask/act through their AFL agents, search an AFL
   agent's knowledge base, look up or mutate Jira/HubSpot/Notion or database data
-  that lives in AFL, create/trigger a squad or automation, or mentions "AFL", "Agents for
+  that lives in AFL, create/edit an agent or a skill, create/trigger a squad or automation,
+  or mentions "AFL", "Agents for
   Life", "hub", "meu agente"/"my agent", or an agent by name. Requires the `afl`
   MCP server configured (`claude mcp list` → afl ✔ Connected).
 ---
@@ -60,6 +62,17 @@ Two modes — choose deliberately:
     `customfield_NNNNN` — never guess them, and don't burn a `chat_with_agent` for it.
   - `mcp__afl__hubspot_search` `{ agentId, objectType, query }` — objectType is
     `contacts | companies | deals | tickets`.
+  - **Per-provider reads, named after the native tool** (`tools:read`): `jira_ler_issue`,
+    `jira_ler_comentarios`, `jira_exportar_anexo`, `hubspot_crm_activities`,
+    `hubspot_crm_files`, `notion_pages_export`, `google_gmail_read`,
+    `google_calendar_read`, `google_drive_read`, `google_sheets_read`,
+    `microsoft_mail_read`, `microsoft_calendar_read`, `microsoft_onedrive_read`,
+    `github_search`. Use these to **read the state before writing** instead of burning a
+    `chat_with_agent`. The export ones (plus `google_drive_read`/`microsoft_onedrive_read`
+    with `action: "export"`) return a **`file_key`** — feed it straight into
+    `gerenciar_documentos` (knowledge base), `jira_anexar_arquivo` or `hubspot_crm_attach`
+    without downloading anything. Drive/OneDrive reads are scoped to the folders
+    configured in the agent's source, so a `list`/`search` won't walk the whole drive.
   - `mcp__afl__notion_query` `{ agentId, databaseId?, query? }` — pass `databaseId`
     (the Notion database id) to query a specific DB; otherwise `query` does a
     workspace search.
@@ -121,6 +134,36 @@ lacks it — surface verbatim):
   **`mcp__afl__get_automation_result`** (scope `automations:read`).
   `mcp__afl__list_automations` (`automations:read`) lists the visible automations.
 
+### Manage agents and skills
+
+CRUD of the user's own agents and skills — separate from `chat_with_agent` (which
+*uses* an agent). These reuse AFL's CQRS commands directly (no LLM in the middle).
+
+- **Agents** — `mcp__afl__get_agent` `{ agent_id }` (scope `agents:read`) returns the
+  full config (name, description, prompt, llm model, avatar, flags).
+  **`mcp__afl__create_agent`** (scope `agents:write`) creates a **personal** agent —
+  only `name` (≥3 chars) is required; optional `description`, `prompt` (system
+  instructions), `level`, `llm_model`, `temperature` (0–2), `category`,
+  `target_audience`, `avatar_icon`, `avatar_color`. **`mcp__afl__update_agent`**
+  `{ agent_id, ... }` (`agents:write`) patches fields (omitted = preserved).
+  **`mcp__afl__delete_agent`** `{ agent_id }` (`agents:write`) soft-deletes (deactivates).
+  Org agents are managed elsewhere (b2b) — `create_agent` always makes a personal one.
+- **Skills** — `mcp__afl__list_skills` `{ type?, category?, search?, organization_id? }`
+  and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`).
+  **`mcp__afl__create_skill`** (scope `skills:write`) — required `slug`
+  (`^[a-z0-9][a-z0-9-]*$`), `name`, `description`, `type` (`prompt|tool|composite`);
+  optional `category`, `prompt_injection`, `tool_definitions[]`, `execution_config`,
+  `parameters_schema`, `default_parameters`. Visibility is **derived from the caller**
+  (personal by default; organizational with an org token). **`mcp__afl__update_skill`**
+  `{ skill_id, ... }` (`skills:write`) patches (slug/type/visibility are immutable);
+  **`mcp__afl__delete_skill`** `{ skill_id }` (`skills:write`).
+- **Enable a skill on an agent (opt-in)** — `mcp__afl__list_agent_skills` `{ agent_id }`
+  (`agents:read`) lists the skills enabled on an agent, each with an `agent_skill_id`.
+  **`mcp__afl__enable_agent_skill`** `{ agent_id, skill_id, config? }` (`agents:write`)
+  turns a skill on for that agent; **`mcp__afl__disable_agent_skill`**
+  `{ agent_id, agent_skill_id }` (`agents:write`) removes it — use the `agent_skill_id`
+  from `list_agent_skills`, not the `skill_id`.
+
 **Confirm before destructive writes:** when a write returns a `confirmationId`, tell
 the user what will change and only call `confirm_action` after they agree (or the
 user's request was already an explicit, unambiguous instruction to do it).
@@ -181,13 +224,16 @@ Sampling is not supported.
   is the fallback for headless/backend-to-backend use.
 - **Scopes gate each tool** (`missing scope ...` = the session lacks it). The
   discovery advertises the full set and the consent screen offers all of them:
-  `agents:chat`, `tools:read`, `tools:write`, `squads:read`, `squads:run`,
-  `squads:write`, `automations:read`, `automations:run` (or `*`). Reads/chat need
-  `tools:read`/`agents:chat`; writes need `tools:write`; squads need their own
-  (`squads:read` to list/read, `squads:run` to fire, `squads:write` to create/edit);
-  automations likewise. `list_agents` / `list_organizations` need no scope. If a
-  squad/create call returns `missing scope squads:write`, re-authorize (or mint an
-  API key) with that scope selected.
+  `agents:chat`, `agents:read`, `agents:write`, `tools:read`, `tools:write`,
+  `skills:read`, `skills:write`, `squads:read`, `squads:run`, `squads:write`,
+  `automations:read`, `automations:run` (or `*`). Reads/chat need
+  `tools:read`/`agents:chat`; writes need `tools:write`; agent CRUD needs
+  `agents:read`/`agents:write`; skill CRUD needs `skills:read`/`skills:write`; squads
+  need their own (`squads:read` to list/read, `squads:run` to fire, `squads:write` to
+  create/edit); automations likewise. `list_agents` / `list_organizations` need no
+  scope. If a call returns `missing scope <x>`, re-authorize (or mint an API key) with
+  that scope selected — **existing tokens must re-consent to gain the new
+  `agents:*`/`skills:*` scopes**.
 - You can only use agents you own or that belong to your session's organization. One
   session = one org context (+ agents you created).
 
