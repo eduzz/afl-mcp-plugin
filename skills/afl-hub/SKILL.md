@@ -139,15 +139,19 @@ lacks it — surface verbatim):
 CRUD of the user's own agents and skills — separate from `chat_with_agent` (which
 *uses* an agent). These reuse AFL's CQRS commands directly (no LLM in the middle).
 
-- **Agents** — `mcp__afl__get_agent` `{ agent_id }` (scope `agents:read`) returns the
-  full config (name, description, prompt, llm model, avatar, flags).
-  **`mcp__afl__create_agent`** (scope `agents:write`) creates a **personal** agent —
-  only `name` (≥3 chars) is required; optional `description`, `prompt` (system
-  instructions), `level`, `llm_model`, `temperature` (0–2), `category`,
-  `target_audience`, `avatar_icon`, `avatar_color`. **`mcp__afl__update_agent`**
-  `{ agent_id, ... }` (`agents:write`) patches fields (omitted = preserved).
-  **`mcp__afl__delete_agent`** `{ agent_id }` (`agents:write`) soft-deletes (deactivates).
-  Org agents are managed elsewhere (b2b) — `create_agent` always makes a personal one.
+- **Agents (org-aware)** — the CRUD tools route automatically between **personal**
+  agents and **organization** agents (which live in the b2b service). `mcp__afl__get_agent`
+  `{ agent_id }` (scope `agents:read`) returns the full config for either.
+  **`mcp__afl__create_agent`** (scope `agents:write`): without `organization_id` it creates
+  a **personal** agent (only `name` ≥3 chars required); with `organization_id` it creates an
+  **org** agent (requires `name` + `prompt`, and the user must be **admin/owner** of the
+  org). Other optionals: `description`, `prompt` (system instructions), `level` (personal
+  only), `llm_model`, `temperature` (0–2), `category`/`target_audience` (personal only),
+  `avatar_icon`, `avatar_color`. **`mcp__afl__update_agent`** `{ agent_id, ... }`
+  (`agents:write`) patches fields (omitted = preserved; on an org agent `category`/`is_active`
+  are ignored). **`mcp__afl__delete_agent`** `{ agent_id }` (`agents:write`) soft-deletes.
+  An org agent shows `type: "organizational"` + `organizationId` in `list_agents`; writing
+  to it needs org admin/owner (enforced server-side).
 - **Skills** — `mcp__afl__list_skills` `{ type?, category?, search?, organization_id? }`
   and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`).
   **`mcp__afl__create_skill`** (scope `skills:write`) — required `slug`
