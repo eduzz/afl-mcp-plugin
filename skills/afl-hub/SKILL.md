@@ -168,6 +168,30 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   `{ agent_id, agent_skill_id }` (`agents:write`) removes it — use the `agent_skill_id`
   from `list_agent_skills`, not the `skill_id`.
 
+### Manage data sources
+
+Data sources (Jira/Notion/Google/DB/API…) are a **separate** subsystem from skills —
+they live in `user_data_sources` and link to agents via `agent_data_connections`.
+**Prerequisite:** for a business integration (Jira, HubSpot, Microsoft, Notion) the
+integration must already be **connected via OAuth** (in the AFL UI); its `integration_uuid`
+comes from there. Find sources/ids with `list_data_sources`.
+
+- `mcp__afl__list_data_sources` (`datasources:read`) → `{ personal, organization }`.
+  `mcp__afl__get_data_source` `{ data_source_id }` (`datasources:read`) reads one.
+- **`mcp__afl__create_data_source`** (`datasources:write`) creates a **personal** source:
+  `{ source_type, name, integration_uuid?, description?, config? }`. `source_type` is
+  canonical (business integrations carry the `_data` suffix: `jira_data`, `hubspot_data`,
+  `notion_database`, `microsoft_365_data`, `google_sheet`, `api_endpoint`, `database_table`,
+  `mcp_server`, …; aliases like `jira`/`notion` are normalized). Provider specifics go in
+  `config` (e.g. Jira → `{ jiraProjectKeys, jiraJqlFilter }`; Notion → `{ notionDatabaseId }`;
+  API → `{ apiEndpoint, apiMethod }`). **Org** sources aren't created here (runs personal) —
+  use the org UI.
+- **`mcp__afl__connect_agent_data_source`** `{ agent_id, data_source_id, sync_frequency? }`
+  (`datasources:write`) attaches a source to an agent — **org-aware** (org agent → b2b path,
+  caller must be org admin/owner; else personal). **`mcp__afl__disconnect_agent_data_source`**
+  `{ agent_id, data_source_id }` (`datasources:write`) detaches (personal agents only today;
+  org → use the UI).
+
 **Confirm before destructive writes:** when a write returns a `confirmationId`, tell
 the user what will change and only call `confirm_action` after they agree (or the
 user's request was already an explicit, unambiguous instruction to do it).
@@ -229,15 +253,15 @@ Sampling is not supported.
 - **Scopes gate each tool** (`missing scope ...` = the session lacks it). The
   discovery advertises the full set and the consent screen offers all of them:
   `agents:chat`, `agents:read`, `agents:write`, `tools:read`, `tools:write`,
-  `skills:read`, `skills:write`, `squads:read`, `squads:run`, `squads:write`,
-  `automations:read`, `automations:run` (or `*`). Reads/chat need
-  `tools:read`/`agents:chat`; writes need `tools:write`; agent CRUD needs
-  `agents:read`/`agents:write`; skill CRUD needs `skills:read`/`skills:write`; squads
-  need their own (`squads:read` to list/read, `squads:run` to fire, `squads:write` to
-  create/edit); automations likewise. `list_agents` / `list_organizations` need no
-  scope. If a call returns `missing scope <x>`, re-authorize (or mint an API key) with
-  that scope selected — **existing tokens must re-consent to gain the new
-  `agents:*`/`skills:*` scopes**.
+  `skills:read`, `skills:write`, `datasources:read`, `datasources:write`, `squads:read`,
+  `squads:run`, `squads:write`, `automations:read`, `automations:run` (or `*`). Reads/chat
+  need `tools:read`/`agents:chat`; writes need `tools:write`; agent CRUD needs
+  `agents:read`/`agents:write`; skill CRUD needs `skills:read`/`skills:write`; data-source
+  CRUD needs `datasources:read`/`datasources:write`; squads need their own (`squads:read`
+  to list/read, `squads:run` to fire, `squads:write` to create/edit); automations likewise.
+  `list_agents` / `list_organizations` need no scope. If a call returns `missing scope <x>`,
+  re-authorize (or mint an API key) with that scope selected — **existing tokens must
+  re-consent to gain the new `agents:*`/`skills:*`/`datasources:*` scopes**.
 - You can only use agents you own or that belong to your session's organization. One
   session = one org context (+ agents you created).
 
