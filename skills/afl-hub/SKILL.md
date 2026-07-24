@@ -124,10 +124,11 @@ lacks it — surface verbatim):
   `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`);
   each step needs an `id` you generate so edges can wire them. Born as a **draft**
   (`is_active=false`) for review in the builder unless you pass `is_active: true`.
-  **To run it later via `run_squad`, pass `allow_agent_trigger: true`** — without it the
-  squad has the agent-tool trigger off and `run_squad` rejects the dispatch. So the full
-  loop through the hub is `create_squad {… is_active:true, allow_agent_trigger:true}` →
-  `run_squad`. To edit one: **`mcp__afl__get_squad`** `{ squad_id }` (`squads:read`) returns
+  Squads created through the hub are **agent-triggerable by default** (`allow_agent_trigger`
+  defaults to `true`), so the full loop is just `create_squad {… is_active:true}` →
+  `run_squad`; pass `allow_agent_trigger: false` to opt out. (Squads made in the UI default to
+  the trigger off, so `run_squad` rejects until you enable it.) To edit one:
+  **`mcp__afl__get_squad`** `{ squad_id }` (`squads:read`) returns
   the full definition, then **`mcp__afl__update_squad`** (`squads:write`) applies changes
   — omitted fields keep their value, but `steps`/`edges` are a **full REPLACE**, so
   resend the whole DAG; `is_active` activates a draft or deactivates a squad, and
