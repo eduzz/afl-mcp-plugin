@@ -135,6 +135,20 @@ lacks it — surface verbatim):
   `allow_agent_trigger` toggles whether `run_squad` may fire it (so
   `update_squad { squad_id, allow_agent_trigger: true }` unblocks an existing squad). Squad
   tools require a token bound to an organization.
+  **Scheduling (cron) is configurable from the hub** — no need to open the AFL builder.
+  Both `create_squad` and `update_squad` accept `schedule_enabled`, `schedule_frequency`
+  (`realtime` = every 10min · `every_15_minutes` · `hourly` = minute 0 · `every_6_hours` ·
+  `daily` = 09:00 · `weekly` = Monday 09:00 · `custom`), plus `custom_schedule_days`
+  (`0`=Sunday … `6`=Saturday) and `custom_schedule_time` (`HH:MM`, server timezone) —
+  the last two are **required** with `custom` and ignored otherwise. Passing
+  `schedule_frequency` without `schedule_enabled` turns the schedule **on** (the response
+  says so in `warnings`). A scheduled squad only fires while `is_active: true`, so a
+  scheduled draft warns you. The tools reject combinations that would never fire
+  (enabled without a frequency, `custom` without days/time); on `update_squad` the check
+  is made against the **merged** state, so `{ squad_id, custom_schedule_time: "18:45" }`
+  works on a squad that is already `custom`. Scheduled runs impersonate the squad's
+  creator. `list_squads` reports each squad's schedule state (`scheduleEnabled`,
+  `scheduleFrequency`, `customScheduleDays`, `customScheduleTime`).
 - **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
   automation (fire-and-forget) → `{ queued, correlationId }`; read history with
   **`mcp__afl__get_automation_result`** (scope `automations:read`).
