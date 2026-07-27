@@ -176,13 +176,16 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`).
   **`mcp__afl__create_skill`** (scope `skills:write`) — required `slug`
   (`^[a-z0-9][a-z0-9-]*$`), `name`, `description`, `type` (`prompt|tool|composite`);
-  optional `category`, `prompt_injection`, `tool_definitions[]`, `execution_config`,
-  `parameters_schema`, `default_parameters`. Visibility is **derived from the caller**
-  (personal by default; organizational with an org token). **`mcp__afl__update_skill`**
+  optional `organization_id`, `category`, `prompt_injection`, `tool_definitions[]`,
+  `execution_config`, `parameters_schema`, `default_parameters`. Visibility is **derived
+  from the target org**: `organization_id` (or the org of an org-scoped token) → skill of
+  that **organization** (caller must be a member); no org → **personal**. The response
+  echoes `visibility` + `organizationId`. **`mcp__afl__update_skill`**
   `{ skill_id, ... }` (`skills:write`) patches (slug/type/visibility are immutable);
   **`mcp__afl__delete_skill`** `{ skill_id }` (`skills:write`).
 - **Enable a skill on an agent (opt-in)** — `mcp__afl__list_agent_skills` `{ agent_id }`
-  (`agents:read`) lists the skills enabled on an agent, each with an `agent_skill_id`.
+  (`agents:read`) lists the skills enabled on an agent, each with an `agent_skill_id`
+  (requires access to the agent: yours, or one of your organizations').
   **`mcp__afl__enable_agent_skill`** `{ agent_id, skill_id, config? }` (`agents:write`)
   turns a skill on for that agent; **`mcp__afl__disable_agent_skill`**
   `{ agent_id, agent_skill_id }` (`agents:write`) removes it — use the `agent_skill_id`
@@ -197,20 +200,24 @@ integration must already be **connected via OAuth** (in the AFL UI); its `integr
 comes from there. Find sources/ids with `list_data_sources`.
 
 - `mcp__afl__list_data_sources` (`datasources:read`) → `{ personal, organization }`.
-  `mcp__afl__get_data_source` `{ data_source_id }` (`datasources:read`) reads one.
-- **`mcp__afl__create_data_source`** (`datasources:write`) creates a **personal** source:
-  `{ source_type, name, integration_uuid?, description?, config? }`. `source_type` is
-  canonical (business integrations carry the `_data` suffix: `jira_data`, `hubspot_data`,
-  `notion_database`, `microsoft_365_data`, `google_sheet`, `api_endpoint`, `database_table`,
-  `mcp_server`, …; aliases like `jira`/`notion` are normalized). Provider specifics go in
-  `config` (e.g. Jira → `{ jiraProjectKeys, jiraJqlFilter }`; Notion → `{ notionDatabaseId }`;
-  API → `{ apiEndpoint, apiMethod }`). **Org** sources aren't created here (runs personal) —
-  use the org UI.
+  `mcp__afl__get_data_source` `{ data_source_id, organization_id? }` (`datasources:read`)
+  reads one — looks in the personal scope first, then in the organization (membership
+  required); the result carries `scope: "personal" | "organization"`.
+- **`mcp__afl__create_data_source`** (`datasources:write`):
+  `{ source_type, name, organization_id?, integration_uuid?, description?, config? }`.
+  With `organization_id` (or an org-scoped token) the source belongs to the
+  **organization** — caller must be org **admin/owner**, and it is created org-wide (no
+  group scoping; use the org UI when the source must be scoped to a group). Without an
+  org it is **personal**. `source_type` is canonical (business integrations carry the
+  `_data` suffix: `jira_data`, `hubspot_data`, `notion_database`, `microsoft_365_data`,
+  `google_sheet`, `api_endpoint`, `database_table`, `mcp_server`, …; aliases like
+  `jira`/`notion` are normalized). Provider specifics go in `config` (e.g. Jira →
+  `{ jiraProjectKeys, jiraJqlFilter }`; Notion → `{ notionDatabaseId }`; API →
+  `{ apiEndpoint, apiMethod }`).
 - **`mcp__afl__connect_agent_data_source`** `{ agent_id, data_source_id, sync_frequency? }`
-  (`datasources:write`) attaches a source to an agent — **org-aware** (org agent → b2b path,
-  caller must be org admin/owner; else personal). **`mcp__afl__disconnect_agent_data_source`**
-  `{ agent_id, data_source_id }` (`datasources:write`) detaches (personal agents only today;
-  org → use the UI).
+  and **`mcp__afl__disconnect_agent_data_source`** `{ agent_id, data_source_id }`
+  (`datasources:write`) attach/detach a source — both **org-aware** (org agent → b2b path,
+  caller must be org admin/owner; else the personal connection).
 
 **Confirm before destructive writes:** when a write returns a `confirmationId`, tell
 the user what will change and only call `confirm_action` after they agree (or the
