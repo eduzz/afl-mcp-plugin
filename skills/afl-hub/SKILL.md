@@ -139,9 +139,13 @@ lacks it — surface verbatim):
   non-uuid ones like `"s1"`, which the backend rejects); `fromStepId`/`toStepId` also
   accept a `stepKey`. Read the returned `steps[].id` if you plan to `update_squad`.
   Step limits are enforced at the boundary with a message that names the field:
-  `timeoutSeconds` 30–600 (capped at 270 for `agent` steps, default 170), `maxRetries`
-  0–3, `retryDelaySeconds` 5–300. Born as a **draft**
-  (`is_active=false`) for review in the builder unless you pass `is_active: true`.
+  `timeoutSeconds` 30–1800 (default 170), `maxRetries` 0–3, `retryDelaySeconds` 5–300.
+  An `agent` step may now hand long work to a **background task** and wait for it, which
+  is why the ceiling is 30 min — but the *synchronous* leg is still capped at **270s**
+  (an HTTP limit). So: work that fits inline must fit in 270s; work that doesn't must go
+  to background, and only then does a `timeoutSeconds` above 270 buy you anything.
+  A squad is born as a **draft** (`is_active=false`) for review in the builder unless
+  you pass `is_active: true`.
   Squads created through the hub are **agent-triggerable by default** (`allow_agent_trigger`
   defaults to `true`), so the full loop is just `create_squad {… is_active:true}` →
   `run_squad`; pass `allow_agent_trigger: false` to opt out. (Squads made in the UI default to
