@@ -5,7 +5,8 @@ description: >-
   talk to AFL agents, read data connected to them (Jira, HubSpot, Notion,
   knowledge base, databases), write/act through them (create/edit records, with
   confirmation for destructive ops), manage your agents and skills (create/edit/delete,
-  and enable/disable a skill on an agent), and create/run org squads and automations. Use
+  put an org agent in a group, and enable/disable a skill on an agent), and create/run org
+  squads and automations. Use
   whenever the user wants to ask/act through their AFL agents, search an AFL
   agent's knowledge base, look up or mutate Jira/HubSpot/Notion or database data
   that lives in AFL, create/edit an agent or a skill, create/trigger a squad or automation,
@@ -161,17 +162,30 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
 
 - **Agents (org-aware)** — the CRUD tools route automatically between **personal**
   agents and **organization** agents (which live in the b2b service). `mcp__afl__get_agent`
-  `{ agent_id }` (scope `agents:read`) returns the full config for either.
+  `{ agent_id }` (scope `agents:read`) returns the full config for either — for an org
+  agent it also carries `groups` (the groups it is linked to).
   **`mcp__afl__create_agent`** (scope `agents:write`): without `organization_id` it creates
   a **personal** agent (only `name` ≥3 chars required); with `organization_id` it creates an
   **org** agent (requires `name` + `prompt`, and the user must be **admin/owner** of the
   org). Other optionals: `description`, `prompt` (system instructions), `level` (personal
   only), `llm_model`, `temperature` (0–2), `category`/`target_audience` (personal only),
-  `avatar_icon`, `avatar_color`. **`mcp__afl__update_agent`** `{ agent_id, ... }`
+  `avatar_icon`, `avatar_color`, and `group_ids` (org only — see below).
+  **`mcp__afl__update_agent`** `{ agent_id, ... }`
   (`agents:write`) patches fields (omitted = preserved; on an org agent `category`/`is_active`
-  are ignored). **`mcp__afl__delete_agent`** `{ agent_id }` (`agents:write`) soft-deletes.
+  are ignored and `group_ids` **redefines** the groups). **`mcp__afl__delete_agent`**
+  `{ agent_id }` (`agents:write`) soft-deletes.
   An org agent shows `type: "organizational"` + `organizationId` in `list_agents`; writing
   to it needs org admin/owner (enforced server-side).
+- **Put an org agent in a group** — `mcp__afl__list_organization_groups`
+  `{ organization_id? }` (scope `agents:read`) lists the org's groups
+  (`{ id, name, description, groupType, hierarchyLevel }`); omit the id to use the token's
+  org. Resolve the group **by name here** and pass its `id` in `group_ids` — never guess a
+  group uuid. `group_ids` is **REPLACE, not append**: the list is the desired final state,
+  groups left out are unlinked and `[]` unlinks all, which makes resending the same list
+  idempotent. Omitting it in `update_agent` leaves the groups untouched — read the current
+  ones from `get_agent` first when you mean to add to them. In `create_agent` the linking
+  happens *after* the agent exists, so a failure there returns the agent plus a `warning`:
+  fix it with `update_agent`, don't recreate. `group_ids` on a personal agent is an error.
 - **Skills** — `mcp__afl__list_skills` `{ type?, category?, search?, organization_id? }`
   and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`).
   **`mcp__afl__create_skill`** (scope `skills:write`) — required `slug`
@@ -282,7 +296,8 @@ Sampling is not supported.
   `agents:chat`, `agents:read`, `agents:write`, `tools:read`, `tools:write`,
   `skills:read`, `skills:write`, `datasources:read`, `datasources:write`, `squads:read`,
   `squads:run`, `squads:write`, `automations:read`, `automations:run` (or `*`). Reads/chat
-  need `tools:read`/`agents:chat`; writes need `tools:write`; agent CRUD needs
+  need `tools:read`/`agents:chat`; writes need `tools:write`; agent CRUD and
+  `list_organization_groups` need
   `agents:read`/`agents:write`; skill CRUD needs `skills:read`/`skills:write`; data-source
   CRUD needs `datasources:read`/`datasources:write`; squads need their own (`squads:read`
   to list/read, `squads:run` to fire, `squads:write` to create/edit); automations likewise.
