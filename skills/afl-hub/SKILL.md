@@ -122,7 +122,15 @@ lacks it — surface verbatim):
   default (run status + per step: status, timings, duration, error, and
   `hasContent`/`contentChars`), because polling used to re-download every finished
   step's full output on every call. Ask for content only when you need it:
-  `fields: "full"` (everything, once at the end) or `step_key`/`step_id` (one step). `mcp__afl__list_squads` (`squads:read`) lists
+  `fields: "full"` (everything, once at the end) or `step_key`/`step_id` (one step).
+  A step still in flight also carries its **deadline and proof of life**, so you can
+  tell working from stuck without guessing: `timeoutSeconds`/`maxAttempts` (the
+  contract that run froze), `elapsedSeconds`, `heartbeatAt`/`heartbeatAgeSeconds`,
+  `overdue`+`overdueSeconds`, and `retrying`+`retryInSeconds`. Read it as: elapsed
+  climbing with a **fresh heartbeat** = working; **stale heartbeat** or `overdue:true`
+  = stuck; `retrying:true` = an attempt already failed (see `error`) and the next one
+  is scheduled. A `running` step with `error` set is mid-retry, not healthy.
+  `mcp__afl__list_squads` (`squads:read`) lists
   the org squads you can trigger — pass `include_all: true` to also see **drafts**,
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
   (scope `squads:write`) creates a squad (DAG of steps): pass `name`, `steps[]` and
