@@ -36,6 +36,54 @@ agent first.
 Never guess an `agentId`. If a call returns `agent not accessible`, the agent isn't
 yours (or your token's org) — pick another from `list_agents`.
 
+## Rules that make the first attempt fail
+
+Short list, high cost. Every item below is a failure that actually happened in
+production use — not a hypothetical. Read it before your first write call.
+
+**1. Array arguments must be real arrays — never a JSON string.**
+A parameter declared `array` in the schema expects `["a","b"]`, not `"[\"a\",\"b\"]"`.
+Serializing it as text is the single most common failure in this hub. The server now
+coerces the common shapes, but coercion is a safety net, not a contract: for
+parameters that decide **scope** (a search filter) or that **replace a whole set**
+(labels on an update, attendees on a calendar update, rows of a spreadsheet write),
+an unreadable value is **rejected instead of guessed** — deliberately, because
+silently dropping a filter returns the *wrong, larger* result set and silently
+emptying a set *deletes* what was there. Send the array.
+
+**2. Read `data.url` — do not parse the text marker.**
+Every file-producing tool returns a display marker in `message`
+(`[AFL_FILE_URL:<url>|<name>]`) **and** a structured `data` carrying the canonical
+**`data.url`** (plus `filename`/`format`). Use `data.url`. The marker's
+`<url>|<name>` shape is a trap: both halves look plausible and picking the wrong one
+fails silently — which is exactly how a reported bug produced a filename where a URL
+belonged. Some tools also keep legacy aliases (`imageUrl`, `file_url`); they are kept
+for compatibility, `url` is the contract.
+
+**3. Some tools answer before the work is done.**
+`execute_in_background` obviously, but also `criar_app_web`, which returns while the
+app is still being built (observed: 4m17s between the reply and the app existing).
+A missing reply does **not** mean the call failed — re-calling creates a second
+resource. Confirm with **`mcp__afl__listar_apps`** (`agents:read`) before retrying:
+it lists your apps newest-first with `status` (`rascunho`/`publicado`/`revogado`/
+`expirado`), and takes `created_within_minutes`, `search` and `app_id`. **A draft is
+not a failure** — only *absence from the list* justifies calling `criar_app_web`
+again.
+
+**4. `chat_with_agent` inside a squad step ≠ `chat_with_agent` directly.**
+A squad step runs with the step's `timeoutSeconds` and, in the synchronous leg, a
+**270s** HTTP ceiling. The same prompt that finishes in a direct call — where your
+client can move it to background — can blow the deadline inside a step. Work that
+does not fit in 270s must go to background, and only then does a `timeoutSeconds`
+above 270 (up to 1800) buy you anything.
+
+**5. Judge a running step by its heartbeat.** See `get_squad_run` below: fresh
+heartbeat with `elapsedSeconds` climbing = working. `overdue` is anomalous and
+short-lived — not seeing it proves nothing.
+
+**6. Writes are opt-in per data source.** A write tool only executes if the target
+source has `allow_agent_write` enabled. The refusal names the source and the fix.
+
 ## Which tool to use
 
 Two modes — choose deliberately:
@@ -241,6 +289,14 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   turns a skill on for that agent; **`mcp__afl__disable_agent_skill`**
   `{ agent_id, agent_skill_id }` (`agents:write`) removes it — use the `agent_skill_id`
   from `list_agent_skills`, not the `skill_id`.
+- **Reading `usageCount` correctly** — `list_agent_skills` returns `usageMeasurement`
+  alongside `usageCount`/`lastUsedAt`, and you must read them together:
+  `"executions"` means the number is real, so **`0` means never executed**;
+  `"not_instrumented"` means the skill only injects prompt text, so `usageCount` and
+  `lastUsedAt` come back **`null`** — never `0`. A prompt skill is injected on every
+  turn whether the model uses it or not, so counting injections would be a turn count
+  wearing a usage costume: dead and live skills would score identically. `null` is the
+  honest answer there; `0` would not be.
 - **What a `native-*` platform skill actually adds:** the ~80 native tools are the agent's
   **default capability** — an agent with zero skills enabled already generates PDFs, writes
   Notion pages, searches Jira. What gates a tool is the **integration/data source connected
@@ -372,11 +428,40 @@ Sampling is not supported.
 - You can only use agents you own or that belong to your session's organization. One
   session = one org context (+ agents you created).
 
+## Publishing an app publicly — what the gate rejects
+
+A **public** app is executed by anonymous visitors using the owner's credentials, so
+the manifest is held to a stricter contract. The refusals name the field; these are
+the ones worth knowing before you author one.
+
+**String params need a real pattern.** Anchoring alone is not enough — `^.*$` and
+`^[\s\S]{1,4000}$` are anchors around "anything". The pattern must also *restrict*:
+a closed character class with a **minimum of 1**. `^[A-Za-zÀ-ÿ0-9\s.,;:!?()\-]{1,500}$`
+passes; the same pattern with `{0,500}` is **rejected**, because a zero minimum makes
+the restrictive part optional again. If the field should be optional, mark it
+`optional: true` — do not express that with `{0,`.
+
+**Free text is allowed where it is content, not where it selects.** A `tool` action
+may declare `unsafePublicFreeText: ["<param>"]` for a param that becomes a *body* —
+an issue summary/description, a comment, a page title/content. It stays forbidden on
+params that decide **what the executor reaches** (`jql`, `query`, ids, project, folder):
+whoever controls those controls the owner's Jira. Cap: 2000 chars, sanitized server-side.
+
+**Writes must have their destination frozen.** A write action in an app is allowed
+only from a curated list, and each tool declares what must sit in `bind` rather than
+be exposed to the visitor — for `jira_criar_issue` that is `project_key`, `issue_type`
+and `labels`. Mandatory `labels` is what keeps the whole thing auditable: every card
+an anonymous visitor creates carries a filterable provenance mark. Exposing a selector
+blocks publication, naming the param.
+
+**`sourceId` in the manifest does not restrict anything today** — what freezes the
+destination is `bind`. Do not rely on it.
+
 ## Known limitations (current)
 
-- **Writes are opt-in per source** — a write tool only executes if the target data
-  source has `allow_agent_write` enabled; otherwise it's rejected. Destructive actions
-  always route through `confirm_action`.
+- **Writes are opt-in per source** (rule 6 above) — and destructive actions always
+  route through `confirm_action`, which is a separate gate: enabling the source does
+  not skip the confirmation.
 - **A source NAME is not a unique id** — write tools resolve the source by
   `datasource_name`, and nothing prevents two sources with the same name. When two or more
   connected sources match the name EXACTLY, resolution fails listing the candidates with their
