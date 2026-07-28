@@ -68,7 +68,7 @@ Two modes — choose deliberately:
     `hubspot_crm_files`, `notion_pages_export`, `google_gmail_read`,
     `google_calendar_read`, `google_drive_read`, `google_sheets_read`,
     `microsoft_mail_read`, `microsoft_calendar_read`, `microsoft_onedrive_read`,
-    `github_search`. Use these to **read the state before writing** instead of burning a
+    `microsoft_sharepoint_scan`, `microsoft_sharepoint_document`, `github_search`. Use these to **read the state before writing** instead of burning a
     `chat_with_agent`. The export ones (plus `google_drive_read`/`microsoft_onedrive_read`
     with `action: "export"`) return a **`file_key`** — feed it straight into
     `gerenciar_documentos` (knowledge base), `jira_anexar_arquivo` or `hubspot_crm_attach`
@@ -118,12 +118,21 @@ lacks it — surface verbatim):
   long/multi-step work so you don't block.
 - **Squads** — `mcp__afl__run_squad` (scope `squads:run`) fires an org squad
   asynchronously → returns a `run_id`; poll **`mcp__afl__get_squad_run`**
-  `{ run_id }` (scope `squads:read`). `mcp__afl__list_squads` (`squads:read`) lists
+  `{ run_id }` (scope `squads:read`) — the poll returns a **status projection** by
+  default (run status + per step: status, timings, duration, error, and
+  `hasContent`/`contentChars`), because polling used to re-download every finished
+  step's full output on every call. Ask for content only when you need it:
+  `fields: "full"` (everything, once at the end) or `step_key`/`step_id` (one step). `mcp__afl__list_squads` (`squads:read`) lists
   the org squads you can trigger — pass `include_all: true` to also see **drafts**,
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
   (scope `squads:write`) creates a squad (DAG of steps): pass `name`, `steps[]` and
   `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`);
-  each step needs an `id` you generate so edges can wire them. Born as a **draft**
+  step and edge `id`s are **optional** — the hub generates them (and replaces
+  non-uuid ones like `"s1"`, which the backend rejects); `fromStepId`/`toStepId` also
+  accept a `stepKey`. Read the returned `steps[].id` if you plan to `update_squad`.
+  Step limits are enforced at the boundary with a message that names the field:
+  `timeoutSeconds` 30–600 (capped at 270 for `agent` steps, default 170), `maxRetries`
+  0–3, `retryDelaySeconds` 5–300. Born as a **draft**
   (`is_active=false`) for review in the builder unless you pass `is_active: true`.
   Squads created through the hub are **agent-triggerable by default** (`allow_agent_trigger`
   defaults to `true`), so the full loop is just `create_squad {… is_active:true}` →
@@ -137,6 +146,9 @@ lacks it — surface verbatim):
   `update_squad { squad_id, allow_agent_trigger: true }` unblocks an existing squad). Squad
   tools require a token bound to an organization.
   **Scheduling (cron) is configurable from the hub** — no need to open the AFL builder.
+  Frequencies include **`monthly`** with a day of the month (a month without that day
+  fires on its last day) — monthly rituals used to be inexpressible and ended up on
+  manual triggering.
   Both `create_squad` and `update_squad` accept `schedule_enabled`, `schedule_frequency`
   (`realtime` = every 10min · `every_15_minutes` · `hourly` = minute 0 · `every_6_hours` ·
   `daily` = 09:00 · `weekly` = Monday 09:00 · `custom`), plus `custom_schedule_days`
@@ -186,8 +198,13 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   ones from `get_agent` first when you mean to add to them. In `create_agent` the linking
   happens *after* the agent exists, so a failure there returns the agent plus a `warning`:
   fix it with `update_agent`, don't recreate. `group_ids` on a personal agent is an error.
-- **Skills** — `mcp__afl__list_skills` `{ type?, category?, search?, organization_id? }`
-  and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`).
+- **Skills** — `mcp__afl__list_skills`
+  `{ type?, category?, search?, organization_id?, page?, limit?, fields? }`
+  and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`). The listing is
+  **paginated and compact by default** (`limit` 50, cap 200): it returns what you need to
+  CHOOSE a skill, not its full config — `fields: "full"` or `get_skill` for that. Same for
+  `mcp__afl__list_data_sources` (`scope`, `page`, `limit`, `fields`, `source_type`), whose
+  items omit absent fields entirely instead of asserting `null`.
   **`mcp__afl__create_skill`** (scope `skills:write`) — required `slug`
   (`^[a-z0-9][a-z0-9-]*$`), `name`, `description`, `type` (`prompt|tool|composite`);
   optional `organization_id`, `category`, `prompt_injection`, `tool_definitions[]`,
@@ -204,6 +221,13 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   turns a skill on for that agent; **`mcp__afl__disable_agent_skill`**
   `{ agent_id, agent_skill_id }` (`agents:write`) removes it — use the `agent_skill_id`
   from `list_agent_skills`, not the `skill_id`.
+- **What a `native-*` platform skill actually adds:** the ~80 native tools are the agent's
+  **default capability** — an agent with zero skills enabled already generates PDFs, writes
+  Notion pages, searches Jira. What gates a tool is the **integration/data source connected
+  to the agent** (and `allow_agent_write` for writes), not a skill. A `native-*` skill is
+  **prompt guidance** about a tool the agent already has (when to use it, parameter shape,
+  pitfalls). So enabling one grants **instruction, not capability** — enabling fifteen just
+  inflates the prompt. To grant capability, connect the integration/source and allow writes.
 
 ### Manage data sources
 
@@ -228,7 +252,8 @@ comes from there. Find sources/ids with `list_data_sources`.
   `jira`/`notion` are normalized). Provider specifics go in `config` (e.g. Jira →
   `{ jiraProjectKeys, jiraJqlFilter }`; Notion → `{ notionDatabaseId }`; API →
   `{ apiEndpoint, apiMethod }`). A source is created **read-only** unless you pass
-  `allow_agent_write: true`.
+  `allow_agent_write: true` — plan for that: a fresh source + connect is not enough for
+  the agent to write anywhere.
 - **`mcp__afl__update_data_source`** (`datasources:write`):
   `{ data_source_id, organization_id?, allow_agent_write?, write_permission_note?, name?,
   description?, config?, integration_uuid?, sync_frequency?, is_active? }` — edits a source
@@ -239,6 +264,15 @@ comes from there. Find sources/ids with `list_data_sources`.
   resolution as `get_data_source` (personal first, then the org — org needs admin/owner);
   only the fields you send change, and `config` is **merged**. Takes effect immediately (the
   connected agents' toolset cache is invalidated).
+- **`mcp__afl__create_mcp_connection`** (`datasources:write`)
+  `{ name, url, headers?, auth_type?, auth_value?, dedupe_by_url? }` — registers an external
+  MCP server as a connection and discovers its tools (handshake + `tools/list`), returning the
+  `integrationUuid` plus the tool catalog with the ids a data source needs. This is what lets you
+  build an `mcp_server` source without the UI: feed the uuid into `create_data_source` with
+  `config: { selectedToolIds, selectedToolsMetadata }`. Idempotent by URL; the same URL with a
+  DIFFERENT credential is refused (it never overwrites another account's credential). Personal
+  scope only — an org MCP connection is still a UI step. The URL must be publicly reachable
+  (private IPs, internal hosts and cloud metadata endpoints are blocked).
 - **`mcp__afl__connect_agent_data_source`** `{ agent_id, data_source_id, sync_frequency? }`
   and **`mcp__afl__disconnect_agent_data_source`** `{ agent_id, data_source_id }`
   (`datasources:write`) attach/detach a source — both **org-aware** (org agent → b2b path,
@@ -323,6 +357,14 @@ Sampling is not supported.
 - **Writes are opt-in per source** — a write tool only executes if the target data
   source has `allow_agent_write` enabled; otherwise it's rejected. Destructive actions
   always route through `confirm_action`.
+- **A source NAME is not a unique id** — write tools resolve the source by
+  `datasource_name`, and nothing prevents two sources with the same name. When two or more
+  connected sources match the name EXACTLY, resolution fails listing the candidates with their
+  ids (it used to pick one arbitrarily, so a write could land on the wrong source). Pass the
+  id to disambiguate; a partial match still resolves to the first hit.
+- **SharePoint covers the document LIBRARY, not the site** — navigation/read, upload,
+  `create_file`, `create_folder`, `copy`, delete-to-recycle-bin. There is no site, modern page
+  (`.aspx`), navigation or web part creation.
 - **Squad/automation tools need an org-bound token** (`squads:read` returns nothing
   useful for a purely personal token).
 - No path versioning yet; the contract may evolve.
