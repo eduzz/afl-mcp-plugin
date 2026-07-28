@@ -227,7 +227,18 @@ comes from there. Find sources/ids with `list_data_sources`.
   `google_sheet`, `api_endpoint`, `database_table`, `mcp_server`, …; aliases like
   `jira`/`notion` are normalized). Provider specifics go in `config` (e.g. Jira →
   `{ jiraProjectKeys, jiraJqlFilter }`; Notion → `{ notionDatabaseId }`; API →
-  `{ apiEndpoint, apiMethod }`).
+  `{ apiEndpoint, apiMethod }`). A source is created **read-only** unless you pass
+  `allow_agent_write: true`.
+- **`mcp__afl__update_data_source`** (`datasources:write`):
+  `{ data_source_id, organization_id?, allow_agent_write?, write_permission_note?, name?,
+  description?, config?, integration_uuid?, sync_frequency?, is_active? }` — edits a source
+  and, above all, **toggles whether the agent may WRITE to it** (`allow_agent_write`, the
+  "Permitir escrita" switch in the AFL UI). Without it the provider's write tools (create a
+  Jira issue, send mail, edit a sheet/page) are **not exposed to the agent**, even with the
+  source connected — so a fresh source + connect is not enough for writes. Same scope
+  resolution as `get_data_source` (personal first, then the org — org needs admin/owner);
+  only the fields you send change, and `config` is **merged**. Takes effect immediately (the
+  connected agents' toolset cache is invalidated).
 - **`mcp__afl__connect_agent_data_source`** `{ agent_id, data_source_id, sync_frequency? }`
   and **`mcp__afl__disconnect_agent_data_source`** `{ agent_id, data_source_id }`
   (`datasources:write`) attach/detach a source — both **org-aware** (org agent → b2b path,
