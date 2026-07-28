@@ -126,10 +126,18 @@ lacks it — surface verbatim):
   A step still in flight also carries its **deadline and proof of life**, so you can
   tell working from stuck without guessing: `timeoutSeconds`/`maxAttempts` (the
   contract that run froze), `elapsedSeconds`, `heartbeatAt`/`heartbeatAgeSeconds`,
-  `overdue`+`overdueSeconds`, and `retrying`+`retryInSeconds`. Read it as: elapsed
-  climbing with a **fresh heartbeat** = working; **stale heartbeat** or `overdue:true`
-  = stuck; `retrying:true` = an attempt already failed (see `error`) and the next one
-  is scheduled. A `running` step with `error` set is mid-retry, not healthy.
+  and `retrying`+`retryInSeconds`. Read it as: elapsed climbing with a **fresh
+  heartbeat** = working; **stale heartbeat** = stuck; `retrying:true` = an attempt
+  already failed (see `error`) and the next one is scheduled. A `running` step with
+  `error` set is mid-retry, not healthy. `overdue`+`overdueSeconds` exist too, but
+  are **anomalous and short-lived** — the deadline passed and nobody closed the step
+  (executor process died), which the watchdog undoes in ~60–120s. **Not seeing
+  `overdue` is the normal case, and is not evidence of health** — judge by heartbeat.
+  The run envelope carries **`definitionDrift`** when the run is executing a frozen
+  definition OLDER than the squad's current one. That is the answer to "I raised
+  `timeoutSeconds` and the step still blew the old limit": a run keeps the snapshot
+  it started with, and a manual step retry keeps it too — only a **new run** picks
+  up the fix.
   `mcp__afl__list_squads` (`squads:read`) lists
   the org squads you can trigger — pass `include_all: true` to also see **drafts**,
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
