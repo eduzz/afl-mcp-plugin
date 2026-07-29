@@ -145,7 +145,7 @@ The hub is **no longer read-only**. Beyond the reads above there are now write a
 orchestration tools, each gated by its own scope (`missing scope ...` = the session
 lacks it — surface verbatim):
 
-- **Write (~46 tools, scope `tools:write`)** — one MCP tool per native write executor
+- **Write (~51 tools, scope `tools:write`)** — one MCP tool per native write executor
   (e.g. create/update issues, send messages, mutate provider records). Each takes an
   `agentId` plus the native tool's params. **Destructive actions return a
   `confirmationId` instead of executing** — call `mcp__afl__confirm_action`
@@ -164,6 +164,21 @@ lacks it — surface verbatim):
   key/URL has no extension. Unsupported formats (e.g. `.xlsx`) are rejected — read the
   data with the integration's own tool and pass the text as `conteudo`. `op: "remover"`
   is destructive (goes through `confirm_action`).
+- **Generate a file** → `mcp__afl__criar_documento` (`tools:write`)
+  `{ agentId, formato: "xlsx"|"docx"|"pptx"|"pdf"|"md"|"html", titulo, conteudo }`.
+  Synchronous: when it returns, the file already exists in storage. Read **`data.url`**
+  (download link) and **`data.s3Key`** — the key works as `file_key` and the URL as
+  `file_url` in the tools that attach/upload (`jira_anexar_arquivo`,
+  `hubspot_crm_attach`, `gerenciar_documentos`, `microsoft_onedrive_write`,
+  `google_drive_create`). That closes *generate → attach* without going through
+  `chat_with_agent`. Never build a URL out of the chat marker text.
+- **Edit a file you generated** → `mcp__afl__editar_documento` (routes by extension) or
+  the direct ones `editar_planilha` / `editar_documento_word` / `editar_apresentacao`.
+  Pass the **exact URL returned at creation** in `documento`; scope is the token's user,
+  not the conversation. Each edit returns a **new** `data.url` — always use the latest.
+  For a big spreadsheet, create it with the header + first batch and append the rest
+  with `editar_planilha` `{ acoes: [{ intervalo: "A202", valores: [[…]] }] }` — a single
+  call with thousands of rows truncates. PDF/MD/HTML aren't editable in place (regenerate).
 - **`mcp__afl__execute_tool`** (scope-gated) — agent-less **org** tool call: run a
   named tool directly in the token's organization context without picking an agent.
   Use only when you have no suitable agent carrier and know the exact `tool_name`.
