@@ -172,6 +172,32 @@ lacks it — surface verbatim):
   `hubspot_crm_attach`, `gerenciar_documentos`, `microsoft_onedrive_write`,
   `google_drive_create`). That closes *generate → attach* without going through
   `chat_with_agent`. Never build a URL out of the chat marker text.
+  `conteudo` is a different shape per format, and passing the wrong one silently
+  produces a near-empty file: `secoes[]` for pdf/docx/md/html (`{ titulo, texto,
+  tabela?, grafico?, imagem_url? }`, `texto` in Markdown — never raw HTML tags),
+  `planilhas[]` for xlsx (`{ nome, colunas, linhas }`, plus an optional `estilos`
+  for colors/sizes — visual formatting IS supported, don't tell the user to format
+  by hand), `slides[]` for pptx.
+- **PPTX specifics** (`criar_documento` `formato: "pptx"`) — a slide is
+  `{ titulo, conteudo, notas?, bullets?, colunas?: [{ titulo, conteudo }], tabela?,
+  grafico?, layout? }`. Three traps worth knowing:
+  - The slide's `conteudo` **coexists** with `bullets`, `tabela` and `grafico` (the
+    text renders above the element) — you do not have to choose one.
+  - `layout` accepts `capa | secao | conteudo | duas_colunas | imagem | imagem_texto
+    | imagem_fundo | citacao | tabela | grafico | encerramento`. Anything outside
+    that list is **ignored without error** and the layout is inferred from the
+    fields you filled — so a typo reads as "the layout parameter did nothing".
+  - `incluir_capa` (default `true`) generates a cover from `titulo`. Pass `false`
+    when your **first slide already is the cover**, otherwise the deck ships with
+    two covers in a row and every slide number is off by one.
+  Use `design: "manual"` when you built rich slides yourself — it renders exactly
+  what you sent and skips the AI layout pass (`"auto"`, the default, is slower).
+- **The download link is a BEARER capability.** `data.url` (`/api/documents/d/<token>`)
+  is HMAC-signed, opens **without authentication** and **does not expire** — for
+  `criar_documento`, `renderizar_pdf` and the `editar_*` tools alike. `isPublic: false`
+  in the response describes the storage object's ACL, not the link. Whoever receives
+  the URL downloads the file: treat it as a secret, don't post it in an open channel
+  and don't reason about it as an internal URL.
 - **Render a page/HTML as a faithful PDF** → `mcp__afl__renderizar_pdf` (`tools:write`)
   `{ agentId, html? | url?, titulo?, formato_pagina?, orientacao?, margens?, esperar_seletor? }`.
   Headless-browser render: preserves fonts, colors, positioning and page breaks — the
