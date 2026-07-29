@@ -145,7 +145,7 @@ The hub is **no longer read-only**. Beyond the reads above there are now write a
 orchestration tools, each gated by its own scope (`missing scope ...` = the session
 lacks it — surface verbatim):
 
-- **Write (~51 tools, scope `tools:write`)** — one MCP tool per native write executor
+- **Write (~52 tools, scope `tools:write`)** — one MCP tool per native write executor
   (e.g. create/update issues, send messages, mutate provider records). Each takes an
   `agentId` plus the native tool's params. **Destructive actions return a
   `confirmationId` instead of executing** — call `mcp__afl__confirm_action`
@@ -172,6 +172,14 @@ lacks it — surface verbatim):
   `hubspot_crm_attach`, `gerenciar_documentos`, `microsoft_onedrive_write`,
   `google_drive_create`). That closes *generate → attach* without going through
   `chat_with_agent`. Never build a URL out of the chat marker text.
+- **Render a page/HTML as a faithful PDF** → `mcp__afl__renderizar_pdf` (`tools:write`)
+  `{ agentId, html? | url?, titulo?, formato_pagina?, orientacao?, margens?, esperar_seletor? }`.
+  Headless-browser render: preserves fonts, colors, positioning and page breaks — the
+  PDF looks like the screen. This is NOT `criar_documento`, which builds a document from
+  structured content using the AFL template and ignores HTML/CSS. "Make me a report" →
+  `criar_documento`; "save THIS page/HTML as PDF" → `renderizar_pdf`. Same output contract
+  (`data.url` + `data.s3Key`). Private/internal URLs are blocked; login-gated pages accept
+  `headers`, but only for domains the renderer allows.
 - **Edit a file you generated** → `mcp__afl__editar_documento` (routes by extension) or
   the direct ones `editar_planilha` / `editar_documento_word` / `editar_apresentacao`.
   Pass the **exact URL returned at creation** in `documento`; scope is the token's user,
