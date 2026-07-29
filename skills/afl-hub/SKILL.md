@@ -503,6 +503,15 @@ blocks publication, naming the param.
 **`sourceId` in the manifest does not restrict anything today** — what freezes the
 destination is `bind`. Do not rely on it.
 
+**Reads without a carrier agent resolve the source by organization.** An action whose
+tool runs on the org credential (`jira_buscar_issues`, `jira_processar`, `datasource_*`
+read) has no agent to narrow the choice, so it resolves against the org's active
+sources of that type. One source resolves. **Two or more are refused** — the error
+names the candidates — because picking one would mean guessing on behalf of an
+anonymous visitor running under the owner's credential. Freeze the choice in `bind`:
+`{ "name": "<source name>" }`, which is a declared param of those tools. A `name` that
+matches nothing is also refused rather than falling back to the only source there is.
+
 ## Known limitations (current)
 
 - **Writes are opt-in per source** (rule 6 above) — and destructive actions always
