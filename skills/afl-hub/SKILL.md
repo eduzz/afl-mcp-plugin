@@ -471,6 +471,11 @@ Notes that save a wrong conclusion:
   action list (existing ones *plus* the new); it replaces, it does not append. Recreating
   loses the link, the history and every adjustment. Only `status: "falhou"` justifies
   `criar_app_web` again.
+- **`despublicar: true` leaves the app `revogado`, and `revogado` is still editable.**
+  Changing the contract of a live app is refused until you pass it; what comes out is
+  not called "draft" — `listar_apps` shows `revogado` — but `editar_app_web` keeps
+  working on it, for as many correction rounds as you need. Only republishing is a human
+  act, on the manage screen; there is no MCP equivalent. Never recreate the app.
 - **Owner-only.** Someone else's app answers `não encontrado` — 404, never 403, and the
   same answer as an id that never existed. Resolve ids with `listar_apps`.
 
@@ -502,6 +507,14 @@ blocks publication, naming the param.
 
 **`sourceId` in the manifest does not restrict anything today** — what freezes the
 destination is `bind`. Do not rely on it.
+
+**A declared carrier `agente` is honoured even where it is optional.** On a read action
+in an org app it used to be dropped silently — `success: true`, `warnings: []`, and no
+`agentId` in the effective manifest. It now routes the action through that agent's
+connections instead of the org credential, which is what disambiguates a provider the
+org has more than one source for. An `agente` that matches no agent of the owner is
+refused, not ignored; on a tool that cannot run via a carrier the refusal says to drop
+the field.
 
 **Reads without a carrier agent resolve the source by organization.** An action whose
 tool runs on the org credential (`jira_buscar_issues`, `jira_processar`, `datasource_*`
