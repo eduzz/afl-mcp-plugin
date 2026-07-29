@@ -316,10 +316,15 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   `avatar_icon`, `avatar_color`, and `group_ids` (org only — see below).
   **`mcp__afl__update_agent`** `{ agent_id, ... }`
   (`agents:write`) patches fields (omitted = preserved; on an org agent `category`/`is_active`
-  are ignored and `group_ids` **redefines** the groups). **`mcp__afl__delete_agent`**
-  `{ agent_id }` (`agents:write`) soft-deletes.
+  are ignored and `group_ids` **redefines** the groups). It also takes
+  **`max_tokens`** (100–8000) — the agent's response token cap, writable on both the personal
+  and the org path; out-of-range is refused rather than silently clamped.
+  **`mcp__afl__delete_agent`** `{ agent_id }` (`agents:write`) soft-deletes.
   An org agent shows `type: "organizational"` + `organizationId` in `list_agents`; writing
-  to it needs org admin/owner (enforced server-side).
+  to it needs org admin/owner (enforced server-side) — being the agent's *creator* is not
+  enough, so a refusal naming "admin/owner" means the role is missing, not the id. Don't
+  route around it via `chat_with_agent` + the native `gerenciar_agentes` tool: that path
+  enforces the same rule now.
 - **Put an org agent in a group** — `mcp__afl__list_organization_groups`
   `{ organization_id? }` (scope `agents:read`) lists the org's groups
   (`{ id, name, description, groupType, hierarchyLevel }`); omit the id to use the token's
