@@ -478,6 +478,15 @@ Notes that save a wrong conclusion:
   act, on the manage screen; there is no MCP equivalent. Never recreate the app.
 - **Owner-only.** Someone else's app answers `não encontrado` — 404, never 403, and the
   same answer as an id that never existed. Resolve ids with `listar_apps`.
+- **`usage` separates attempt from outcome — read all of it before concluding.**
+  `invocations` counts everything that arrived; `deniedInvocations` was blocked by the
+  guard (never ran, never cost); `failedInvocations` **ran and failed**;
+  `succeededInvocations` delivered. Volume alone cannot tell a healthy app from a broken
+  one — 12 invocations with 12 failures used to read exactly like 12 deliveries. And
+  `lastInvocationStatus` (`ok`/`denied`/`error`) is the one that answers "is it broken
+  *now*?": the window average cannot, since 10 consecutive failures at the end score the
+  same as 10 spread out. `listar_apps` carries the two that change how a row reads
+  (`failedInvocations`, `lastInvocationStatus`); the full breakdown is here.
 
 ## Publishing an app publicly — what the gate rejects
 
