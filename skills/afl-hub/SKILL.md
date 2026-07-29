@@ -72,7 +72,9 @@ there before retrying. The list is newest-first with `status`
 written right now: **wait and list again, do not re-call** (that creates a second
 app; `openUrl` is withheld while there is no page). **A draft is not a failure.**
 `falhou` means the generation died — `failedReason` says why, and that one you may
-recreate. Only *absence from the list* justifies calling `criar_app_web` again.
+recreate. Only *absence from the list* justifies calling `criar_app_web` again. The
+list does not carry the manifest — to read what an app actually authorizes, use
+**`mcp__afl__get_app_web`** (see "Reading an app's contract" below).
 
 **4. `chat_with_agent` inside a squad step ≠ `chat_with_agent` directly.**
 A squad step runs with the step's `timeoutSeconds` and, in the synchronous leg, a
@@ -431,6 +433,46 @@ Sampling is not supported.
   re-consent to gain the new `agents:*`/`skills:*`/`datasources:*` scopes**.
 - You can only use agents you own or that belong to your session's organization. One
   session = one org context (+ agents you created).
+
+## Reading an app's contract — `get_app_web`
+
+**`mcp__afl__get_app_web`** `{ app_id }` (`agents:read`) returns one app of yours
+**with the full, effective manifest** — the same object the runtime reads to decide
+whether a page action may execute. `listar_apps` deliberately does not carry it (it is
+a listing); this is where it lives.
+
+Two reasons to reach for it:
+
+- **Diagnosis.** An app whose contract was accepted at creation can still be refused
+  at execution. The manifest is the only place that says why: per action, `tool` is the
+  native executor that actually runs, `agentId` is the carrier agent whose credential
+  authorizes the source, `bind` are the **frozen** params the page cannot change,
+  `params` is what it may send (with the type/pattern the server enforces), and `mode`
+  (`read`/`write`) picks the door. Compare the refused action against its entry here.
+- **Audit.** It is the only way, through the hub, to verify what a **published** app
+  authorizes — which tools, under whose credential, with which params frozen, for which
+  audience. Treat it as a governance answer, not a debugging convenience.
+
+Alongside the manifest it returns the state that explains behaviour: `status`,
+`generationStatus`, the **effective** `visibility` (the column the runtime applies),
+`isActive`, `currentVersion`, `publishedAt`/`expiresAt`, spend caps and
+`allowedDomains`, plus `usage`. When the manifest's own `visibility` differs from the
+effective one — `editar_app_web` edits the manifest without publishing — the response
+says so in `visibilityDivergence`.
+
+Notes that save a wrong conclusion:
+
+- **An empty `actions` is not always "app with no capability".** While `status` is
+  `gerando` the contract has not been written yet (it lands at the end of generation) —
+  `manifestState: "vazio"` plus the `hint` tell you which case you are in. On a `ready`
+  app, empty really does mean the page may call nothing, and that is the cause of the
+  runtime refusal.
+- **The fix is `editar_app_web`, not a new app.** Pass `capacidades` with the **whole**
+  action list (existing ones *plus* the new); it replaces, it does not append. Recreating
+  loses the link, the history and every adjustment. Only `status: "falhou"` justifies
+  `criar_app_web` again.
+- **Owner-only.** Someone else's app answers `não encontrado` — 404, never 403, and the
+  same answer as an id that never existed. Resolve ids with `listar_apps`.
 
 ## Publishing an app publicly — what the gate rejects
 
