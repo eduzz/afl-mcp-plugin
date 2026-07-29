@@ -512,6 +512,12 @@ anonymous visitor running under the owner's credential. Freeze the choice in `bi
 `{ "name": "<source name>" }`, which is a declared param of those tools. A `name` that
 matches nothing is also refused rather than falling back to the only source there is.
 
+`hubspot_crm_search` behaves the same way with one difference: what it disambiguates is
+the **portal**, not the source row — several sources pointing at the same HubSpot account
+are not ambiguous. And it has no source param to freeze, so the fix there is to declare
+the carrier `agente` on the capability (its connection picks the portal), or to keep a
+single account active.
+
 ## Known limitations (current)
 
 - **Writes are opt-in per source** (rule 6 above) — and destructive actions always
