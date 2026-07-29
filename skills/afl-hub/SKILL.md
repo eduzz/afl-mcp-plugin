@@ -63,12 +63,16 @@ for compatibility, `url` is the contract.
 **3. Some tools answer before the work is done.**
 `execute_in_background` obviously, but also `criar_app_web`, which returns while the
 app is still being built (observed: 4m17s between the reply and the app existing).
-A missing reply does **not** mean the call failed — re-calling creates a second
-resource. Confirm with **`mcp__afl__listar_apps`** (`agents:read`) before retrying:
-it lists your apps newest-first with `status` (`rascunho`/`publicado`/`revogado`/
-`expirado`), and takes `created_within_minutes`, `search` and `app_id`. **A draft is
-not a failure** — only *absence from the list* justifies calling `criar_app_web`
-again.
+The row, though, is **reserved at dispatch**: the app shows up in
+**`mcp__afl__listar_apps`** (`agents:read`) from the first instant, as
+`status: "gerando"`. So a missing reply is answerable instead of a guess — confirm
+there before retrying. The list is newest-first with `status`
+(`gerando`/`rascunho`/`publicado`/`revogado`/`expirado`/`falhou`) and takes
+`created_within_minutes`, `search` and `app_id`. `gerando` = the page is being
+written right now: **wait and list again, do not re-call** (that creates a second
+app; `openUrl` is withheld while there is no page). **A draft is not a failure.**
+`falhou` means the generation died — `failedReason` says why, and that one you may
+recreate. Only *absence from the list* justifies calling `criar_app_web` again.
 
 **4. `chat_with_agent` inside a squad step ≠ `chat_with_agent` directly.**
 A squad step runs with the step's `timeoutSeconds` and, in the synchronous leg, a
