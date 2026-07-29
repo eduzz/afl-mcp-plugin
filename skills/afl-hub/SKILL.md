@@ -192,6 +192,15 @@ lacks it — surface verbatim):
     two covers in a row and every slide number is off by one.
   Use `design: "manual"` when you built rich slides yourself — it renders exactly
   what you sent and skips the AI layout pass (`"auto"`, the default, is slower).
+- **Brand the deck instead of shipping a generic one** — `marca: { base?,
+  cor_primaria?, cor_secundaria?, fonte?, fonte_titulo?, logo_url? }` applies YOUR
+  identity over the theme: titles, rules, table header and the first chart color
+  take `cor_primaria`, the cover takes `cor_secundaria`, the fonts reach the
+  package's own `theme1.xml` (not just the text boxes) and `logo_url` goes on the
+  cover. Colors are hex; an invalid one is ignored rather than failing the call.
+  Without `marca` the deck carries AFL's identity. Also worth knowing: slides now
+  ship at the **modern 16:9 size** (12192000×6858000 EMU), so pasting them into a
+  current deck no longer rescales the content.
 - **The download link is a BEARER capability.** `data.url` (`/api/documents/d/<token>`)
   is HMAC-signed, opens **without authentication** and **does not expire** — for
   `criar_documento`, `renderizar_pdf` and the `editar_*` tools alike. `isPublic: false`
