@@ -27,10 +27,15 @@ agent first.
 
 ## Golden workflow (always)
 
-1. **`mcp__afl__list_agents`** (no args) → returns `{ agents: [{ id, name, description }] }`.
-2. **Pick the agent whose `description` matches the domain** of the task (e.g. a
-   "Financeiro" agent for finance, a "Jira"/"Labzz" agent for Jira, an "Assistente"
-   for general/Microsoft tasks). When ambiguous, ask the user which agent to use.
+1. **`mcp__afl__list_agents`** (no args) → returns
+   `{ agents: [{ id, name, description, capabilitySummary, dataSources }] }`.
+2. **Pick the agent by what it is CONNECTED to, not by its name.** `dataSources`
+   lists each connected source as `{ name, sourceType, allowAgentWrite }`, and Jira
+   sources also carry `jiraProjects` — the project keys that source is scoped to.
+   That is the field that answers "which agent can write in project LAB": a write
+   outside a Jira source's project scope is **denied**, so guessing from the name
+   costs a failed call. `description` and `capabilitySummary` are hints, not
+   evidence — both are empty on plenty of org agents. When still ambiguous, ask.
 3. Pass that agent's **`id`** as `agentId` to every other tool.
 
 Never guess an `agentId`. If a call returns `agent not accessible`, the agent isn't
@@ -90,6 +95,24 @@ short-lived — not seeing it proves nothing.
 **6. Writes are opt-in per data source.** A write tool only executes if the target
 source has `allow_agent_write` enabled. The refusal names the source and the fix.
 
+**7. A Jira source's project scope binds EVERY write, not just issue creation.**
+Commenting, transitioning, updating a field and creating an issue are all denied
+when the target project isn't in the scope of a writable Jira source of that agent
+(`dataSources[].jiraProjects` in `list_agents`). It used to bind only
+`jira_criar_issue`, so an agent scoped to `AV` could comment on and close `LAB`
+cards while the create call claimed the project "was not configured for this
+agent" — a message that contradicted what the same agent had just done. Now the
+rule is one rule; a source with no project scope declared is still unrestricted.
+The refusal names the requested project, the scope that denied it, and which of the
+agent's sources reach what.
+
+**8. A `✅` from `jira_criar_issue` is not "everything was saved".** Check
+`fieldsDropped` in the returned `data`: any field you asked for that did NOT make it
+into the card is listed there (and `parentApplied` / `priorityApplied` say whether
+the hierarchy and priority took). A card can be created with the project's default
+priority if the value you passed doesn't exist in that instance — discover the real
+ones with `jira_descobrir { kind: "priorities" }` and pass the name or the id.
+
 ## Which tool to use
 
 Two modes — choose deliberately:
@@ -107,9 +130,15 @@ Two modes — choose deliberately:
     search over the agent's indexed KB. **Use specific, literal terms** (names,
     numbers, section titles); generic queries fall below the similarity threshold and
     return `[]`.
-  - `mcp__afl__jira_search` `{ agentId, query, project?, maxRows? }` — `query` is
-    **JQL** (e.g. `ORDER BY created DESC`, `project = AV AND status = "In Progress"`).
-    Never pass natural language as JQL.
+  - `mcp__afl__jira_search` `{ agentId, query, project?, maxRows?, verbosity? }` —
+    `query` is **JQL** (e.g. `ORDER BY created DESC`, `project = AV AND status = "In
+    Progress"`). Never pass natural language as JQL. Each issue carries `key`, `id`
+    (the numeric one, needed by custom fields that take a reference) and, when the
+    instance has the field, its `sprint`. The envelope's `projects` reflects what the
+    QUERY asked for; `sourceProjects` is the source's own scope. Responses default to
+    `verbosity: "compact"` — the `data` envelope only. Pass `verbosity: "full"` to
+    also get the same content rendered as markdown (~2× the tokens; you rarely need
+    it).
   - `mcp__afl__jira_descobrir` `{ agentId, kind, project_key?, board_id?, issue_key?, query? }`
     — real Jira metadata: `projects | issue_types | transitions | priorities | boards |
     sprints | components | versions | users | fields`. Call it BEFORE a Jira write to
@@ -122,7 +151,13 @@ Two modes — choose deliberately:
     `hubspot_crm_files`, `notion_pages_export`, `google_gmail_read`,
     `google_calendar_read`, `google_drive_read`, `google_sheets_read`,
     `microsoft_mail_read`, `microsoft_calendar_read`, `microsoft_onedrive_read`,
-    `microsoft_sharepoint_scan`, `microsoft_sharepoint_document`, `github_search`. Use these to **read the state before writing** instead of burning a
+    `microsoft_sharepoint_scan`, `microsoft_sharepoint_document`, `github_search`.
+    `jira_ler_issue` and `jira_ler_comentarios` take the same `verbosity` as
+    `jira_search` (compact by default), and `jira_ler_issue` returns the issue's
+    numeric `id` alongside `key`. `microsoft_sharepoint_scan` resolves `site_id`/
+    `drive_id` from the agent's SharePoint source — **don't go digging for them**;
+    pass `data_source_id` only when the agent has more than one SharePoint source
+    (the tool says so, naming the candidates). Use these to **read the state before writing** instead of burning a
     `chat_with_agent`. The export ones (plus `google_drive_read`/`microsoft_onedrive_read`
     with `action: "export"`) return a **`file_key`** — feed it straight into
     `gerenciar_documentos` (knowledge base), `jira_anexar_arquivo` or `hubspot_crm_attach`
@@ -152,6 +187,17 @@ lacks it — surface verbatim):
   `{ confirmationId }` to actually run it. Per-source `allow_agent_write` still gates
   whether a source accepts writes. Don't enumerate all of them from memory; discover them
   with `listTools` (or `/mcp`) and consult the handbook.
+  - **`jira_mudar_status` walks the workflow.** Pass the DESTINATION status
+    (`"CLOSED"`), not the next hop: when the workflow requires intermediate states
+    it advances on its own while the next step is unambiguous, and returns the
+    `path` it took. Where the workflow branches it stops and lists the options
+    rather than picking your team's process for you. A card already in the target
+    is a declared no-op (`alreadyInTargetStatus`), never an error. So don't loop
+    `jira_descobrir { kind: "transitions" }` + one hop at a time — that was 13
+    calls to close 3 cards.
+  - **`jira_criar_issue`: `epic` and `parent_key` both take an issue key.** The
+    epic is applied as the issue's parent, and `parentApplied` in the result tells
+    you whether it took — no second read needed.
 - **Feed the knowledge base** → `mcp__afl__gerenciar_documentos` (`tools:write`)
   `{ agentId, op: "adicionar", titulo, conteudo? | file_key? | file_url?, nome_arquivo?,
   is_critical? }`. `conteudo` is already-extracted text; **`file_key`** takes a file
