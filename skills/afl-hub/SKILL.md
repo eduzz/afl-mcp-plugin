@@ -377,6 +377,11 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   are ignored and `group_ids` **redefines** the groups). It also takes
   **`max_tokens`** (100–8000) — the agent's response token cap, writable on both the personal
   and the org path; out-of-range is refused rather than silently clamped.
+  **To change PART of the agent's `prompt`, use `prompt_edits` / `prompt_append` /
+  `prompt_prepend`** — same anchored-edit contract as `update_skill` (literal match,
+  must be unique, aborts the whole call on a miss, cannot be combined with the full
+  `prompt`). The current value is read through the same route that writes it, so an
+  org agent is read from the org side and a personal one locally.
   **`mcp__afl__delete_agent`** `{ agent_id }` (`agents:write`) soft-deletes.
   An org agent shows `type: "organizational"` + `organizationId` in `list_agents`; writing
   to it needs org admin/owner (enforced server-side) — being the agent's *creator* is not
