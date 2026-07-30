@@ -703,6 +703,18 @@ single account active.
 - **SharePoint covers the document LIBRARY, not the site** — navigation/read, upload,
   `create_file`, `create_folder`, `copy`, delete-to-recycle-bin. There is no site, modern page
   (`.aspx`), navigation or web part creation.
+- **The open-web tools are NOT on the hub surface** — `web_search`, `scrape_webpage`
+  and `crawl_website` are agent-side tools; they reach you only indirectly, through
+  `chat_with_agent`. Two things about what they return change how you must read the
+  agent's answer. A **scrape declares every cut it made**: `[Recorte: X de Y …]` is a
+  slice the caller asked for and *can* be continued (there is a `next_offset`), while
+  `[Conteúdo TRUNCADO no limite de leitura da página]` means the page is bigger than
+  the read cap and there is **no** continuation — neither one is "the whole page". A
+  **crawl declares whether the sweep finished** (`complete`, `stoppedReason`:
+  `completed | time_budget | page_cap | aborted`): an interrupted sweep covers only the
+  pages actually visited and **never justifies concluding the site lacks the
+  information** — say what was seen, then widen `max_pages`/`max_depth` or sharpen the
+  instructions.
 - **Squad/automation tools need an org-bound token** (`squads:read` returns nothing
   useful for a purely personal token).
 - No path versioning yet; the contract may evolve.
