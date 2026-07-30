@@ -1,5 +1,5 @@
 {
   "name": "afl-mcp",
-  "description": "Agents for Life — conector MCP para o Claude Code via /api/mcp/hub: conversar com agentes, ler dados (Jira/HubSpot/Notion/KB/bancos), escrever (com confirmação), gerenciar agentes e skills (criar/editar/excluir e habilitar skill em agente), criar e rodar squads e automações, além de resources e prompts de descoberta de skills. Autenticado por OAuth no browser (ou API key).",
+  "description": "Agents for Life — conector MCP para o Claude Code via /api/mcp/hub: conversar com agentes, ler dados (Jira/HubSpot/Notion/KB/bancos), escrever (com confirmação), gerenciar agentes e skills (criar/editar/excluir e habilitar skill em agente), criar e rodar squads e automações, além de resources e prompts de descoberta de skills. Traz duas skills: afl-hub (como chamar as tools) e afl-design (o que criar, em que ordem e com que escopo). Autenticado por OAuth no browser (ou API key).",
   "author": { "name": "Eduzz / Agents for Life" }
 }

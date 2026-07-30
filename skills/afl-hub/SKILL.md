@@ -25,6 +25,11 @@ model): the chosen agent carries the organization, connected data sources, and O
 credentials used to execute. There is no generic/global execution — always pick an
 agent first.
 
+This skill answers **how to call** the hub. When the question is **what to create** —
+should this be an agent, a skill, a data source, a knowledge document, a squad or a
+web app, in which order, with which scope — read **`afl-design`** instead, and come
+back here for the signatures.
+
 ## Golden workflow (always)
 
 1. **`mcp__afl__list_agents`** (no args) → returns

@@ -14,7 +14,9 @@ O plugin instala duas coisas de uma vez:
   - **Squads e automações (novo):** disparar squads e automações da sua organização e acompanhar o resultado.
   - **Tarefas longas (novo):** rodar uma tarefa em segundo plano e buscar o resultado depois.
   - **Descoberta de skills (novo):** listar e ler as skills do sistema e as que estão habilitadas em cada agente, e usar prompts prontos (como `use_skill`) para acionar uma skill específica pelo seu agente.
-- **Um guia embutido** que ensina o Claude Code a usar essas ferramentas do jeito certo — você não precisa decorar comando nenhum, é só pedir em linguagem natural.
+- **Dois guias embutidos** que ensinam o Claude Code a usar tudo isso do jeito certo — você não precisa decorar comando nenhum, é só pedir em linguagem natural:
+  - **`afl-hub`** — *como chamar*: as ferramentas, o que cada retorno significa e as armadilhas que fazem a primeira tentativa falhar.
+  - **`afl-design`** — *o que criar*: quando a resposta é um agente, uma skill, uma fonte de dados, um documento, um squad ou um app web; em que ordem montar; e como não dar mais acesso do que o necessário. Útil quando você está estruturando uma área ou um processo no AFL pela primeira vez, ou quando uma escrita falha e o conserto é de estrutura, não de parâmetro.
 
 Exemplos do que dá para pedir depois de instalar:
 
@@ -55,13 +57,13 @@ No Claude Code, rode:
 
 Você deve ver o servidor **`afl`** na lista. Da primeira vez que você usar uma ferramenta dele, o navegador abre para o login — depois aparece como conectado.
 
-Para conferir o guia embutido, rode:
+Para conferir os guias embutidos, rode:
 
 ```
 /skill list
 ```
 
-Deve aparecer `afl-mcp:afl-hub`.
+Devem aparecer `afl-mcp:afl-hub` e `afl-mcp:afl-design`.
 
 ## Como usar no dia a dia
 
