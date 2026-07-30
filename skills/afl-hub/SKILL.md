@@ -210,6 +210,14 @@ lacks it — surface verbatim):
   - **`jira_criar_issue`: `epic` and `parent_key` both take an issue key.** The
     epic is applied as the issue's parent, and `parentApplied` in the result tells
     you whether it took — no second read needed.
+  - **Web pages: `criar_pagina_web` → `listar_paginas_web` → `editar_pagina_web`.**
+    Creating returns the page's `url`; editing takes that same `url` and publishes
+    a NEW version. When the user refers to a page that already exists without
+    giving you the link ("edit that report page"), call `mcp__afl__listar_paginas_web`
+    `{ agentId, busca?, limit? }` (`tools:read`) — it lists the pages generated for
+    this user, newest first, each with the `url` ready to pass to the editor.
+    **Do not recreate a page to change it:** recreating loses everything the
+    original brief didn't repeat.
 - **Feed the knowledge base** → `mcp__afl__gerenciar_documentos` (`tools:write`)
   `{ agentId, op: "adicionar", titulo, conteudo? | file_key? | file_url?, nome_arquivo?,
   is_critical? }`. `conteudo` is already-extracted text; **`file_key`** takes a file
