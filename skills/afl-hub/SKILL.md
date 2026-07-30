@@ -409,6 +409,22 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   echoes `visibility` + `organizationId`. **`mcp__afl__update_skill`**
   `{ skill_id, ... }` (`skills:write`) patches (slug/type/visibility are immutable);
   **`mcp__afl__delete_skill`** `{ skill_id }` (`skills:write`).
+  - **To change PART of a `prompt_injection`, never resend the whole text.** Use
+    `prompt_injection_edits: [{ find, replace, replace_all? }]` — anchored
+    substitutions applied server-side to the CURRENT value. `find` is matched
+    **literally** (whitespace, line breaks and accents count) and must be unique;
+    zero matches, or more than one without `replace_all`, aborts the whole call and
+    nothing is written. `prompt_injection_append` / `_prepend` add a section without
+    an anchor. `prompt_injection` (the full field) still exists but means "rewrite
+    everything", and cannot be combined with the partial forms.
+    Why it matters: these prompts run to tens of KB and an org skill's prompt is
+    shared by everyone in the org. Resending it makes you re-emit from memory a text
+    you were not asked to rewrite — any drift is a silent edit — and turns a
+    one-line change into a full rewrite, which is what it looks like to anything
+    watching the call. A failing anchor is also the cheap detector that the text
+    changed since you read it: the edit fails instead of clobbering someone else's
+    change. The result carries `promptInjectionEdit` (edits applied, size before/
+    after) so you can confirm the effect without re-reading the prompt.
 - **Enable a skill on an agent (opt-in)** — `mcp__afl__list_agent_skills` `{ agent_id }`
   (`agents:read`) lists the skills enabled on an agent, each with an `agent_skill_id`
   (requires access to the agent: yours, or one of your organizations').
