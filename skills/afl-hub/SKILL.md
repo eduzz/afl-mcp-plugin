@@ -139,11 +139,16 @@ Two modes — choose deliberately:
     `verbosity: "compact"` — the `data` envelope only. Pass `verbosity: "full"` to
     also get the same content rendered as markdown (~2× the tokens; you rarely need
     it).
-  - `mcp__afl__jira_descobrir` `{ agentId, kind, project_key?, board_id?, issue_key?, query? }`
+  - `mcp__afl__jira_descobrir` `{ agentId, kind, project_key?, board_id?, issue_key?, query?, verbosity? }`
     — real Jira metadata: `projects | issue_types | transitions | priorities | boards |
     sprints | components | versions | users | fields`. Call it BEFORE a Jira write to
     get the real transition name, issue type, sprint/board id, assignee accountId or
     `customfield_NNNNN` — never guess them, and don't burn a `chat_with_agent` for it.
+    On `kind: "sprints"`, `boardId` is the board that OWNS the sprint (the same value
+    `jira_search` reports on an issue) and `foundOnBoardId` is the board it was listed
+    through — a sprint shows up on every board whose filter reaches it, so those two
+    legitimately differ. When more than one sprint is active, `data.warning` says so:
+    **ask the user which one**, don't pick.
   - `mcp__afl__hubspot_search` `{ agentId, objectType, query }` — objectType is
     `contacts | companies | deals | tickets`.
   - **Per-provider reads, named after the native tool** (`tools:read`): `jira_ler_issue`,
@@ -184,9 +189,16 @@ lacks it — surface verbatim):
   (e.g. create/update issues, send messages, mutate provider records). Each takes an
   `agentId` plus the native tool's params. **Destructive actions return a
   `confirmationId` instead of executing** — call `mcp__afl__confirm_action`
-  `{ confirmationId }` to actually run it. Per-source `allow_agent_write` still gates
-  whether a source accepts writes. Don't enumerate all of them from memory; discover them
-  with `listTools` (or `/mcp`) and consult the handbook.
+  `{ confirmationId }` to actually run it. It takes no `agentId`: the pending
+  confirmation carries the agent AND its organization from the call that emitted it,
+  and the permission check on confirm is the same one that ran on emission. (It used
+  to carry only the agent, so confirming a delete from an **org** agent was refused
+  with "no writable Jira source connected to this agent" — about an agent that had
+  just written to that very card. If you ever see a refusal on confirm that
+  contradicts a write that just succeeded, that's the shape of it.) Per-source
+  `allow_agent_write` still gates whether a source accepts writes. Don't enumerate
+  all of them from memory; discover them with `listTools` (or `/mcp`) and consult
+  the handbook.
   - **`jira_mudar_status` walks the workflow.** Pass the DESTINATION status
     (`"CLOSED"`), not the next hop: when the workflow requires intermediate states
     it advances on its own while the next step is unambiguous, and returns the
