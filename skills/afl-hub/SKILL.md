@@ -323,8 +323,10 @@ lacks it — surface verbatim):
   up the fix.
   Lost the `run_id` (new session, `run_squad`'s response is gone)? **`mcp__afl__list_squad_runs`**
   `{ squad_id }` (`squads:read`) lists that squad's runs, **most recent first** — same compact
-  summary as each item, no step output. `page`/`limit` paginate (`limit` 1–100); there is **no
-  status or date filter** today, so page through if you need one.
+  summary as each item, no step output. `page`/`limit` paginate (`limit` 1–100). Filter with
+  `status` (one value or an array — `pending`, `running`, `waiting_approval`, `completed`,
+  `partial`, `failed`, `cancelled`) and/or `start_date`/`end_date` (`YYYY-MM-DD`, over the run's
+  creation date; `end_date` is **inclusive** — the whole day counts).
   `mcp__afl__list_squads` (`squads:read`) lists
   the org squads you can trigger — pass `include_all: true` to also see **drafts**,
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
