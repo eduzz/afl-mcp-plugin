@@ -301,7 +301,7 @@ lacks it — surface verbatim):
   long/multi-step work so you don't block.
 - **Squads** — `mcp__afl__run_squad` (scope `squads:run`) fires an org squad
   asynchronously → returns a `run_id`; poll **`mcp__afl__get_squad_run`**
-  `{ run_id }` (scope `squads:read`) — the poll returns a **status projection** by
+  `{ squad_id, run_id }` (scope `squads:read`) — the poll returns a **status projection** by
   default (run status + per step: status, timings, duration, error, and
   `hasContent`/`contentChars`), because polling used to re-download every finished
   step's full output on every call. Ask for content only when you need it:
@@ -321,6 +321,10 @@ lacks it — surface verbatim):
   `timeoutSeconds` and the step still blew the old limit": a run keeps the snapshot
   it started with, and a manual step retry keeps it too — only a **new run** picks
   up the fix.
+  Lost the `run_id` (new session, `run_squad`'s response is gone)? **`mcp__afl__list_squad_runs`**
+  `{ squad_id }` (`squads:read`) lists that squad's runs, **most recent first** — same compact
+  summary as each item, no step output. `page`/`limit` paginate (`limit` 1–100); there is **no
+  status or date filter** today, so page through if you need one.
   `mcp__afl__list_squads` (`squads:read`) lists
   the org squads you can trigger — pass `include_all: true` to also see **drafts**,
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
