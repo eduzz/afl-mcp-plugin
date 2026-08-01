@@ -542,6 +542,17 @@ comes from there. Find sources/ids with `list_data_sources`.
   `mcp__afl__get_data_source` `{ data_source_id, organization_id? }` (`datasources:read`)
   reads one — looks in the personal scope first, then in the organization (membership
   required); the result carries `scope: "personal" | "organization"`.
+- **An empty list means empty; a missing block means "not checked".** When a backing
+  service is down, these reads no longer answer "there is nothing". `scope:"organization"`
+  with the dependency down is an **error**; `scope:"all"` returns what it could plus
+  `partial: true` and `unavailable: [{ scope, service, reason }]`, and **omits** the
+  `organization` block and its counters rather than claiming `total: 0`. `list_agents`
+  marks the same situation with `dataSourcesUnavailable: true` per agent (plus `partial`
+  in the envelope), and `get_data_source` says it **could not verify** instead of
+  "data source not found". This distinction exists because the old behaviour cost real
+  work: during a 4-minute outage the hub reported healthy sources as absent, and the
+  correct-looking conclusion — "the agent lost access, recreate the sources" — produces
+  duplicate configuration. **Never recreate a source off a degraded read.**
 - **Both reads now carry `integrationAccount`** — the identity of the account behind
   the source's `integrationUuid`:
   `{ email, label, type, connected, owner: "personal"|"organization", grantedScopes? }`
