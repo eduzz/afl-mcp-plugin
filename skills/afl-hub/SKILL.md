@@ -118,9 +118,32 @@ the hierarchy and priority took). A card can be created with the project's defau
 priority if the value you passed doesn't exist in that instance — discover the real
 ones with `jira_descobrir { kind: "priorities" }` and pass the name or the id.
 
+**9. The prose of `chat_with_agent` is NOT evidence that anything ran.** The reply
+text comes out of an LLM, and *fabricated* success reads exactly like real success:
+an agent reported "Ferramenta `google_calendar_read` — Status: ✓ Sucesso — Nenhum
+evento encontrado" for a call that **never happened**, and that became a project
+decision ("the Calendar is connected, the agenda is empty") until something else
+disproved it. **Cross the narrative with `_meta.toolCalls` before treating any claim
+of execution as fact.** If the prose says a tool ran and it is not there with
+`status: "ok"`, it did not run. See "Reading `chat_with_agent`'s `_meta`" below.
+
+**10. A Google data source must declare WHICH Google service it is.** The
+`source_type`s `google_drive_file`, `google_drive_folder` and `google_services_data`
+are shared by Gmail, Calendar and Drive, so they say nothing on their own.
+`config.googleSourceType` is **mandatory** on those three (`gmail | drive | calendar
+| meet | sheets | docs | slides | forms`) — without it `create_data_source` is
+**refused**, naming the field. That refusal is the feature: it used to be accepted,
+and the source then showed `isActive: true` in the listing, connected to the agent
+without complaint, and **every read failed** with "Integração Google não configurada"
+— an error pointing at the integration (which was fine) instead of at the missing
+field. See "Manage data sources" below.
+
 ## Which tool to use
 
-Two modes — choose deliberately:
+Two modes — choose deliberately. The dividing line is **fact vs judgement**: for a
+FACT use the deterministic tool (`google_calendar_read`, `google_gmail_read`,
+`jira_search`, `query_database` — raw JSON, no model in the middle); for a JUDGEMENT
+(synthesis, analysis, a decision) use the agent.
 
 - **Let the agent orchestrate** → `mcp__afl__chat_with_agent`
   `{ agentId, message, conversationId? }`. Runs the agent's FULL loop (RAG over its
@@ -183,6 +206,39 @@ Two modes — choose deliberately:
 The read tools **auto-resolve** the provider's source from the agent's connections.
 If an agent has more than one source of a provider, the tool returns an error asking
 you to specify the source — surface that to the user.
+
+### Reading `chat_with_agent`'s `_meta` — the verifiable record
+
+The reply text is prose. `_meta` is what the platform measured:
+
+```jsonc
+_meta: {
+  conversationId, messageId,
+  llmModel,                       // kept at the top for backwards compatibility
+  llm: { model, inputTokens, outputTokens, totalTokens, costUsd },
+  toolCalls: [
+    { tool: "google_calendar_read", iteration: 1, status: "ok", durationMs: 812,
+      params: { /* truncated preview, secrets masked */ } },
+    { tool: "jira_criar_issue", iteration: 2, status: "error", durationMs: 240,
+      error: "nenhuma fonte Jira gravável conectada a este agente" }
+  ]
+}
+```
+
+- **`status`** is `ok` | `error` | `pending_confirmation` | `blocked`.
+  `pending_confirmation` = a destructive action stopped waiting for
+  `confirm_action` (it did **not** execute); `blocked` = a gate refused it before
+  execution (write on a source without `allow_agent_write`, a project outside the
+  source's scope, a missing scope). `error` carries the executor's **real** message,
+  not the model's paraphrase of it.
+- **Always reconcile the narrative against `toolCalls`** (rule 9). A tool missing
+  from the list did not run, whatever the text says. `params` is a redacted preview —
+  enough to identify *which* call was made, not to replay it.
+- **`costUsd` may be `null`** — that means **not priceable** (a model with no price
+  table, or a turn with no counted tokens), never "it was free". Use `llm` for spend
+  caps instead of counting calls: a fixed estimate per call is a volume limiter
+  wearing a spend limiter's clothes, where reading 3 emails and reading 200 cost the
+  same.
 
 ### Write & action tools (Fase 3)
 
@@ -481,9 +537,25 @@ integration must already be **connected via OAuth** (in the AFL UI); its `integr
 comes from there. Find sources/ids with `list_data_sources`.
 
 - `mcp__afl__list_data_sources` (`datasources:read`) → `{ personal, organization }`.
+  `scope: "all"` (the default) no longer blows up in a runtime error, and
+  `scope:"all"` + `fields:"full"` is a valid combination.
   `mcp__afl__get_data_source` `{ data_source_id, organization_id? }` (`datasources:read`)
   reads one — looks in the personal scope first, then in the organization (membership
   required); the result carries `scope: "personal" | "organization"`.
+- **Both reads now carry `integrationAccount`** — the identity of the account behind
+  the source's `integrationUuid`:
+  `{ email, label, type, connected, owner: "personal"|"organization", grantedScopes? }`
+  (keys with no value are **omitted**, as everywhere else in the hub's listings; the
+  whole object is absent when the source has no `integrationUuid` — or when the lookup
+  itself failed, which is fail-soft — so absence never proves the account isn't there).
+  Two things it answers:
+  **who reads whose mailbox** — in an org with two Google accounts connected, nothing
+  said which one a source used — and **"expired token" vs "that account never
+  authorized this service"**: the first is `connected: false`, the second is
+  `connected: true` with the scope missing from `grantedScopes`, and both surface as
+  the same read error. **Note it well: a source's NAME is free text and is not
+  evidence of which account it uses** — until now it was the only clue, and a source
+  called "Agenda do Financeiro" could perfectly well be reading someone else's.
 - **`mcp__afl__create_data_source`** (`datasources:write`):
   `{ source_type, name, organization_id?, integration_uuid?, description?, config? }`.
   With `organization_id` (or an org-scoped token) the source belongs to the
@@ -497,6 +569,18 @@ comes from there. Find sources/ids with `list_data_sources`.
   `{ apiEndpoint, apiMethod }`). A source is created **read-only** unless you pass
   `allow_agent_write: true` — plan for that: a fresh source + connect is not enough for
   the agent to write anywhere.
+  - **Google sources must declare the service** (rule 10). On `google_drive_file`,
+    `google_drive_folder` and `google_services_data`, `config.googleSourceType` is
+    **required** — `gmail | drive | calendar | meet | sheets | docs | slides | forms`
+    — and its absence is a refusal, not a warning. Minimal example:
+    ```
+    create_data_source({ source_type: "google_drive_file", name: "Agenda comercial",
+                         integration_uuid: "...", config: { googleSourceType: "calendar" } })
+    ```
+    The value lives in two places (the `google_workspace_subtype` column, which the
+    runtime reads first, and `config.googleSourceType`); the hub now **derives one
+    from the other and writes both**, so sending either is enough. Types that already
+    name the service (`google_sheet`, `google_doc`, `google_forms`) need nothing.
 - **`mcp__afl__update_data_source`** (`datasources:write`):
   `{ data_source_id, organization_id?, allow_agent_write?, write_permission_note?, name?,
   description?, config?, integration_uuid?, sync_frequency?, is_active? }` — edits a source
@@ -507,6 +591,12 @@ comes from there. Find sources/ids with `list_data_sources`.
   resolution as `get_data_source` (personal first, then the org — org needs admin/owner);
   only the fields you send change, and `config` is **merged**. Takes effect immediately (the
   connected agents' toolset cache is invalidated).
+  - **Same Google rule here, and this is the fix for a source already broken.**
+    Sending `config: { googleSourceType: "calendar" }` now updates the **column the
+    runtime reads** as well, not just the config — before, the config changed, the
+    column stayed empty and the source stayed broken, so the obvious repair did not
+    repair. The field is **not** required on update (the value may already be stored);
+    an unrecognized value is refused, naming the accepted ones.
 - **`mcp__afl__create_mcp_connection`** (`datasources:write`)
   `{ name, url, headers?, auth_type?, auth_value?, dedupe_by_url? }` — registers an external
   MCP server as a connection and discovers its tools (handshake + `tools/list`), returning the
@@ -594,6 +684,17 @@ Sampling is not supported.
   re-consent to gain the new `agents:*`/`skills:*`/`datasources:*` scopes**.
 - You can only use agents you own or that belong to your session's organization. One
   session = one org context (+ agents you created).
+- **Issuing an API key is deliberately UI-only — stop looking for the tool.** There is
+  no hub tool that creates, lists or revokes a service key, and there will not be: the
+  channel the agents reach must not mint the credential that grants access to it,
+  otherwise an agent (or text it read) could forge its own persistent key with any
+  scopes it liked, and revoking the token in use would fix nothing. The path is human:
+  **`/api-tokens`** in the AFL UI (`https://app.agentsforlife.org/api-tokens`) — create
+  the key, pick the **scopes** from the list above, optionally bind it to an
+  organization. The `afl_live_...` value is shown **once**. Its HTTP equivalent, under
+  a user JWT, is `POST /api/auth/api-tokens` (the same route the screen calls); see the
+  handbook §2. When a user asks you to "create an AFL API key", point them there — do
+  not go hunting for a tool.
 
 ## Reading an app's contract — `get_app_web`
 
