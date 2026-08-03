@@ -207,9 +207,13 @@ JSON, no model in the middle); for a JUDGEMENT
     the tools **ENABLED** on an `mcp_server` source: `{ id, name, description,
     inputSchema, required }` per tool, plus `dataSourceId`, `name`, `scope`
     (`personal`|`organization`), `organizationId`, `allowAgentWrite`, `total` and `hint`.
-    Org-aware: looks for the source in the token's **personal** scope first and, failing
-    that, in the **organization** (the token's, or `organization_id`), requiring active
-    membership. The gate is **`tools:read` — the same scope that executes**, not
+    Org-aware: looks in the **organization** first (the token's, or `organization_id`,
+    requiring active membership) and then in the token owner's **personal** scope — that
+    order because the personal lookup filters by owner only and does NOT exclude org
+    sources, so an org source you created comes back through it; calling it "personal"
+    would run the read without org context (org credential unresolved, no `organization_id`
+    in tracking). The org lookup is strict, so no personal source can come back from it.
+    The gate is **`tools:read` — the same scope that executes**, not
     `datasources:read`: a read-only collector should not have to widen its token just to
     discover a tool's name. **The catalog is a SNAPSHOT** taken when the source was saved:
     a tool created on the MCP server afterwards does not show up here and is not callable
@@ -220,7 +224,7 @@ JSON, no model in the middle); for a JUDGEMENT
     equivalent of what `google_calendar_read`/`jira_search` are for the native
     integrations: use it to establish **FACT** and to put a cheap gate in front of a
     collector, keeping `chat_with_agent` for **judgement**. Same org resolution as
-    `list_mcp_tools` (personal first, then the org with active membership) — it works on a
+    `list_mcp_tools` (org first with active membership, then personal) — it works on a
     personal source of the token's owner and on an organization source. Result comes in
     the hub's standard read envelope (`data` + `message`); errors from the MCP server
     arrive verbatim. Four refusals, all of them **before** executing anything:
