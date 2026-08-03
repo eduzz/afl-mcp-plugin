@@ -142,7 +142,8 @@ field. See "Manage data sources" below.
 
 Two modes — choose deliberately. The dividing line is **fact vs judgement**: for a
 FACT use the deterministic tool (`google_calendar_read`, `google_gmail_read`,
-`jira_search`, `query_database` — raw JSON, no model in the middle); for a JUDGEMENT
+`jira_search`, `query_database` — and `mcp_call_tool` for an `mcp_server` source — raw
+JSON, no model in the middle); for a JUDGEMENT
 (synthesis, analysis, a decision) use the agent.
 
 - **Let the agent orchestrate** → `mcp__afl__chat_with_agent`
@@ -202,6 +203,49 @@ FACT use the deterministic tool (`google_calendar_read`, `google_gmail_read`,
   - `mcp__afl__query_database` `{ agentId, dataSourceId?, query }` — natural-language
     or SELECT-style question over a connected DB. `dataSourceId` is optional and
     auto-resolved when the agent has a single database source.
+  - `mcp__afl__list_mcp_tools` `{ data_source_id, organization_id? }` — the catalog of
+    the tools **ENABLED** on an `mcp_server` source: `{ id, name, description,
+    inputSchema, required }` per tool, plus `dataSourceId`, `name`, `scope`
+    (`personal`|`organization`), `organizationId`, `allowAgentWrite`, `total` and `hint`.
+    Org-aware: looks for the source in the token's **personal** scope first and, failing
+    that, in the **organization** (the token's, or `organization_id`), requiring active
+    membership. The gate is **`tools:read` — the same scope that executes**, not
+    `datasources:read`: a read-only collector should not have to widen its token just to
+    discover a tool's name. **The catalog is a SNAPSHOT** taken when the source was saved:
+    a tool created on the MCP server afterwards does not show up here and is not callable
+    until the source is edited and saved again.
+  - `mcp__afl__mcp_call_tool` `{ data_source_id, tool_name, params?, organization_id? }` —
+    calls a tool of an `mcp_server` source **directly** and returns the raw result,
+    **without going through a model** (no LLM tokens spent). For MCP sources this is the
+    equivalent of what `google_calendar_read`/`jira_search` are for the native
+    integrations: use it to establish **FACT** and to put a cheap gate in front of a
+    collector, keeping `chat_with_agent` for **judgement**. Same org resolution as
+    `list_mcp_tools` (personal first, then the org with active membership) — it works on a
+    personal source of the token's owner and on an organization source. Result comes in
+    the hub's standard read envelope (`data` + `message`); errors from the MCP server
+    arrive verbatim. Four refusals, all of them **before** executing anything:
+    - **Only ENABLED tools are callable.** A name outside the catalog is REFUSED naming
+      the enabled ones, and **nothing runs** — never substituted by "the closest match".
+      That is the heart of the guarantee: the runtime selector only fails in an actionable
+      way when the name has a separator; a single-word name outside the catalog would fall
+      into keyword scoring and be served by the sibling tool with the highest score — HTTP
+      200 with data from another domain, no error at all.
+    - **A source with no catalog recorded** (`config.selectedToolsMetadata` empty) is
+      refused explaining how to record it (edit and save the source, or recreate it with
+      `create_mcp_connection` + `create_data_source`). Exception: a legacy source carrying
+      only `mcp_tool_name` stays callable for that single tool.
+    - **The deletion family** (`delete/del/remove/archive/drop/trash/destroy/purge/erase`)
+      is refused here: the MCP connector's delete permission is granted **PER AGENT** and
+      there is no carrier agent in this call. To delete, use `chat_with_agent` with an
+      agent that has "Permitir exclusão" enabled for that MCP connector.
+    - **A dependency being unavailable NEVER becomes "source not found"** — the answer
+      says it **could not verify** and warns you not to recreate the source (same rule as
+      "an empty list means empty; a missing block means *not checked*" under "Manage data
+      sources").
+
+    Flow worth remembering: `list_data_sources { source_type: "mcp_server" }` →
+    `list_mcp_tools { data_source_id }` → `mcp_call_tool { data_source_id, tool_name,
+    params }`.
 
 The read tools **auto-resolve** the provider's source from the agent's connections.
 If an agent has more than one source of a provider, the tool returns an error asking
@@ -617,10 +661,24 @@ comes from there. Find sources/ids with `list_data_sources`.
   DIFFERENT credential is refused (it never overwrites another account's credential). Personal
   scope only — an org MCP connection is still a UI step. The URL must be publicly reachable
   (private IPs, internal hosts and cloud metadata endpoints are blocked).
+  - **Once the source exists, its catalog is a first-class read and its tools run without
+    an agent and without an LLM**: `mcp__afl__list_mcp_tools` → `mcp__afl__mcp_call_tool`
+    (both `tools:read`, described under "Which tool to use"). Before them the catalog only
+    existed in this tool's response (once, at creation) or inside
+    `config.selectedToolsMetadata` of `get_data_source` — internal configuration doing the
+    job of API documentation, under a scope a read-only collector has no other reason to
+    hold.
 - **`mcp__afl__connect_agent_data_source`** `{ agent_id, data_source_id, sync_frequency? }`
   and **`mcp__afl__disconnect_agent_data_source`** `{ agent_id, data_source_id }`
   (`datasources:write`) attach/detach a source — both **org-aware** (org agent → b2b path,
   caller must be org admin/owner; else the personal connection).
+- **"This agent has no access to the source" now separates a MISSING CONNECTION from the
+  WRONG SCOPE.** When an **organization** agent reads a source that is in fact the
+  caller's **personal** one, the refusal says the problem is the source's **scope** —
+  naming the source, its id and its type — and that **connecting the source to the agent
+  does not fix it** (recreate the source in the organization, with an org integration, or
+  read through a personal agent). The old message pointed at the connection, which sends
+  you to the wrong repair.
 
 **Confirm before destructive writes:** when a write returns a `confirmationId`, tell
 the user what will change and only call `confirm_action` after they agree (or the
@@ -823,6 +881,11 @@ single account active.
   connected sources match the name EXACTLY, resolution fails listing the candidates with their
   ids (it used to pick one arbitrarily, so a write could land on the wrong source). Pass the
   id to disambiguate; a partial match still resolves to the first hit.
+- **An `mcp_server` source's tool catalog is a snapshot of its configuration** —
+  `list_mcp_tools`/`mcp_call_tool` only see the tools recorded when the source was last
+  saved, so a tool added on the MCP server afterwards needs the source edited and saved
+  again. And **deletion never goes through `mcp_call_tool`**: that permission is per
+  agent, so it goes through `chat_with_agent`.
 - **SharePoint covers the document LIBRARY, not the site** — navigation/read, upload,
   `create_file`, `create_folder`, `copy`, delete-to-recycle-bin. There is no site, modern page
   (`.aspx`), navigation or web part creation.
