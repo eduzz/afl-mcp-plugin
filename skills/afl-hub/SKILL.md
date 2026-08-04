@@ -435,8 +435,25 @@ lacks it — surface verbatim):
   the org squads you can trigger — pass `include_all: true` to also see **drafts**,
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
   (scope `squads:write`) creates a squad (DAG of steps): pass `name`, `steps[]` and
-  `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`);
-  step and edge `id`s are **optional** — the hub generates them (and replaces
+  `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`).
+  A step's `type` is one of **five**, and each one needs a **different `config`** —
+  an incomplete `config` fails the whole DAG, so get it right up front:
+  `agent` → `{ agentId, instructions? }` · `automation` → `{ automationId }` ·
+  **`approval`** (human gate, pauses the run) → `{ approverUserIds: [...] }` **or**
+  `{ approverGroupRole: "admin" | "member" }` — **one of them is mandatory**
+  (optional: `message`, `expiresInHours`, default 168) ·
+  `action` → `{ actionType, messageContent?, actionConfig }` with `actionType` in
+  `send_inbox_notification` · `webhook` (needs `actionConfig.webhookUrl`) ·
+  `send_whatsapp` (needs `actionConfig.whatsappRecipient`) · `execute_integration`
+  (needs `actionConfig.integrationId` + `integrationActionName`) · `generate_report`
+  (needs top-level `config.reportAgentId` + `actionConfig.reportType`) ·
+  `squad` → `{ squadId, waitForCompletion? }`, chaining **another** org squad.
+  **`approval` is a step `type`, never an `actionType`** — that confusion (plus an
+  `approval` step with no approver) used to come back as a bodyless
+  `HTTP 400: "Definição do squad inválida"`, which reads like "approval isn't
+  supported". It is; it just needs an approver. The hub now rejects an incomplete
+  `config` at the boundary, naming the step and the missing field.
+  Step and edge `id`s are **optional** — the hub generates them (and replaces
   non-uuid ones like `"s1"`, which the backend rejects); `fromStepId`/`toStepId` also
   accept a `stepKey`. Read the returned `steps[].id` if you plan to `update_squad`.
   Step limits are enforced at the boundary with a message that names the field:
