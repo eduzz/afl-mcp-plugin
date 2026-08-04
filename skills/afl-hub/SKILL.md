@@ -262,7 +262,7 @@ JSON, no model in the middle); for a JUDGEMENT
   - `mcp__afl__list_genie_spaces` — the Databricks Genie spaces the connected workspace
     exposes, with the space `id` the `native-databricks-genie-*` skills ask for.
   - `mcp__afl__list_organization_groups` — the org's groups (name → id), the input to
-    `group_ids`.
+    `group_ids` in `create_agent`/`update_agent` **and** in `create_squad`/`update_squad`.
   - `mcp__afl__list_skills { visibility: "platform", search }` — whether a native
     capability for X exists at all.
 
@@ -567,6 +567,27 @@ lacks it — surface verbatim):
   `allow_agent_trigger` toggles whether `run_squad` may fire it (so
   `update_squad { squad_id, allow_agent_trigger: true }` unblocks an existing squad). Squad
   tools require a token bound to an organization.
+  **Scoping a squad to groups — `group_ids`, and the field the hub could read but not
+  write.** `get_squad` always returned `groupIds` (plus a compat `groupId`), and no tool
+  ever wrote it: you could create the group, create the agent, put the agent in the group —
+  and then stop at the squad and open the UI. Both `create_squad` and `update_squad` now
+  take **`group_ids`** (org **admin/owner**), resolved from `list_organization_groups` or
+  freshly created with `create_organization_group`.
+  It is **REPLACE, not append**, exactly like an agent's `group_ids`: in `create_squad`
+  omitting it leaves the squad **org-wide** (everyone in the org); in `update_squad`
+  omitting it **keeps** the current scope, the list you send becomes the whole scope, and
+  `[]` **unlinks** it back to org-wide. Read the current scope from `get_squad` first when
+  you mean to *add* a group.
+  On the read side `groupIds` is the **canonical** field — the N:N scope — and `groupId` is
+  1:1 compat that always equals `groupIds[0] ?? null`, so the two can never disagree; an
+  empty `groupIds` with a null `groupId` means org-wide, not "unknown".
+  This is not cosmetic metadata: a squad's group scope decides **who sees it**
+  (`list_squads`, `get_squad`), **who may trigger it**, and who is resolved as approver for
+  an `approval` step with `approverGroupRole`. That is why it needs org admin/owner — the
+  refusal comes back as `blocked` **before** the write is attempted, and a group belonging
+  to **another organization** is rejected outright. `create_squad` echoes the scope it
+  stored in `groupIds`; `update_squad` echoes it only when your patch touched it, so
+  "I left the scope alone" and "I made it org-wide" never look the same.
   **Scheduling (cron) is configurable from the hub** — no need to open the AFL builder.
   Frequencies include **`monthly`** with a day of the month (a month without that day
   fires on its last day) — monthly rituals used to be inexpressible and ended up on
@@ -637,7 +658,9 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   **`mcp__afl__create_organization_group`** `{ organization_id?, name, description?,
   group_type?, parent_group_id?, color?, icon?, responsibilities?, metadata? }` (scope
   `agents:write`, org **admin/owner**) creates it and returns the `id` you pass straight to
-  `group_ids` — building a whole org over MCP used to stop exactly here.
+  `group_ids` — in `create_agent`/`update_agent` (the agent joins the group) **and** in
+  `create_squad`/`update_squad` (the squad's group scope); building a whole org over MCP
+  used to stop exactly here.
   **`mcp__afl__update_organization_group`** `{ group_id, organization_id?, … }` patches it
   (only the fields you send; an empty patch is refused instead of returning the group
   untouched and looking like it applied). `group_type` is `time | area | contexto | papel |
