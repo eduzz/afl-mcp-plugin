@@ -49,7 +49,8 @@ another's output.
 
 A step of type **`approval`** pauses the run inside the DAG. It takes
 `approverUserIds: [...]` **or** `approverGroupRole: "admin" | "member"` — one of them is
-mandatory — plus an optional `message` and `expiresInHours` (default 168, seven days).
+mandatory — plus an optional `message`, `expiresInHours` (default 168, seven days) and
+`maxLoops`, the review loop described below.
 
 Measured: a run sat in `waiting_approval` past **407 seconds** with `timeoutSeconds: 300`
 on that same step. Approval is **not** governed by the step timeout; the two deadlines
@@ -58,17 +59,32 @@ pipeline into four hand-stitched squads. Don't.
 
 ## What has no equivalent
 
-| In the source | In AFL | Do this |
-|---|---|---|
-| Review loop (the reviewer sends work back to the writer, N times) | **Absent.** A DAG has no back edge, and `maxRetries` retries a *failure*, not a rejection | A `squad` step with `waitForCompletion: true` — the parent pauses in `waiting_subrun` and the child's output feeds the next steps — re-triggered by the following gate. Less automatic, and visible |
-| A local connector with no counterpart (own messaging API, an authenticated browser) | Depends | Replace it with a native surface. A **web app** at `visibility: org` solves this more often than expected, and removes the token |
+One thing, and it is the one the crossing exists for: **a local connector with no
+counterpart** — an own messaging API, an authenticated browser profile. Replace it with a
+native surface. A **web app** at `visibility: org` solves this more often than expected, and
+removes the token. (This used to be a table. Two of its rows have since become capabilities,
+below — which is the more useful lesson: check before you design the workaround.)
+
+**Review loops now port directly.** The reviewer sending work back to the writer, N times,
+is two fields on the DAG you already draw: an edge **`onOutcome: 'rejected'`** leaving the
+`approval` step and pointing back at a step that precedes it — *where* the rejection goes —
+plus **`maxLoops`** (1–5) on the gate — *how many* round trips. Neither works alone, and the
+platform requires at least one `onOutcome: 'approved'` edge for the happy path. On a
+rejection the stretch between target and gate reopens and the **reviewer's note lands in the
+reopened step's prompt by itself** — do not hand-stitch the feedback; read `loopIteration` on
+the step to know which cycle you are looking at, since the loop overwrites the same row.
+`maxRetries` remains the wrong tool: it retries a *failure*, and a rejection is not one. The
+workaround this section used to prescribe — a `squad` step with `waitForCompletion: true`,
+re-fired by the following gate — meant a second squad to maintain for a loop the DAG now
+holds; and the obvious alternative, drawing the back edge by hand, used to be *accepted* and
+left the run hanging forever.
 
 **Quarterly and four-monthly cadences now port directly.** They are not a frequency of their
 own: `schedule_frequency: "monthly"` plus **`schedule_months`**, an array of the months it
 runs — `[3,6,9,12]` quarterly, `[12,4,8]` four-monthly, `[1,7]` biannual — alongside the
 `schedule_day_of_month` and `custom_schedule_time` that `monthly` already requires. Omitting
 it means every month, and it is **rejected** with any other frequency. Port the cadence as it
-is; the workaround this table used to prescribe — a monthly reminder whose message says
+is; the workaround this section used to prescribe — a monthly reminder whose message says
 whether this month counts — fires 12× a year for the 3 that matter.
 
 ## Check how AFL exposes each source — the discipline may invert
@@ -125,7 +141,9 @@ had the same signature: **green gate, work not done.**
   falsely claiming the lookup had happened and naming a source that does not exist. By the
   status projection alone it was indistinguishable from a real dossier.
 
-Both cases are why the verification below is not optional:
+Both were fixed at the platform level after that migration. They stay here as the *shape* of
+the failure, not as open defects — the next one will look like this and have another cause,
+which is exactly why the verification below is not optional:
 
 - **For a document, read the reachability signal the platform reports, not the upload's
   success message.** `gerenciar_documentos` `op: "listar"` reports, per document, whether
@@ -164,7 +182,8 @@ discover it before running — so budget for one throwaway run.
 5.  Route each piece            afl-design's routing question
 6.  Build in afl-design's order source → write → scope → agent → connect → skill → document → squad
 7.  Rewrite the prompts         drop file paths and numbers; keep persona; add the stopping rule
-8.  Draw the DAG                edges only for real dependencies; `approval` at checkpoints
+8.  Draw the DAG                edges only for real dependencies; `approval` at checkpoints,
+                               + `onOutcome`/`maxLoops` where rejection sends work back
 9.  Run it once                 with scope declared and missing sources named out loud
 10. READ THE WHOLE OUTPUT       and the tool calls behind it — `completed` is not proof
 11. Record it                   what worked, what was missing, and what the run cost
@@ -183,7 +202,7 @@ Not everything in the source deserves the crossing.
   what only decorates the character.
 - **Disciplines tied to the old connector** (see the Databricks case above).
 - **Anything that only existed to work around the old runner** — file-based handoffs,
-  manual ordering, retry loops the platform now owns.
+  manual ordering, retry loops and review round-trips the platform now owns.
 
 ## Anti-patterns of migration
 

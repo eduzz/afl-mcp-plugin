@@ -471,7 +471,12 @@ lacks it — surface verbatim):
   (`completed`, `hasContent: true`). Same rule as `_meta.toolCalls` in
   `chat_with_agent`: cross the prose with the record. `baseContextTokens` shows the
   step's context floor — the input tokens it pays before any tool runs, which is
-  what tells you whether a step is over-equipped with skills. The run envelope's
+  what tells you whether a step is over-equipped with skills. A step touched by a
+  review loop carries **`loopIteration`** — the number of loops that gate has
+  already closed. It has to be read: there is **one row per step per run**, and a
+  loop *resets* that row instead of adding one, so without this number a step
+  reopened for the third time is indistinguishable from its first execution (same
+  `attempt`, same `status`). The run envelope's
   **`totalTokens`/`totalCost`** (USD) are the aggregate consumption, and they are
   updated **during** the run (including while it sits in `waiting_approval`), not
   only at the end.
@@ -518,6 +523,26 @@ lacks it — surface verbatim):
   `HTTP 400: "Definição do squad inválida"`, which reads like "approval isn't
   supported". It is; it just needs an approver. The hub now rejects an incomplete
   `config` at the boundary, naming the step and the missing field.
+  **A rejection can send the work back instead of killing the run.** Two pieces,
+  and neither works alone: an edge's **`onOutcome`** (`"approved"` | `"rejected"`;
+  omit it for the normal unconditional edge) says **where** a rejection goes back
+  to, and the gate's **`config.maxLoops`** (`0`–`5`, `0` = no loop) says **how
+  many** times. Until this existed, rejecting failed the step, cascaded over its
+  descendants and stranded the reviewer's note — and a back edge drawn by hand was
+  *accepted*, leaving the run `running` forever with no step in flight. These
+  rules **reject the squad at create/update time**, so you don't find them by
+  error: `onOutcome` is only valid on an edge leaving an `approval` step; a
+  `rejected` edge must target an **ancestor** of the gate (it's a loop, not a
+  lateral jump); `rejected` requires `maxLoops >= 1`, and `maxLoops >= 1` requires
+  at least one `approved` edge (otherwise approving leads nowhere); `maxLoops`
+  outside 0–5 is refused; and two loops must be **strictly nested or fully
+  disjoint** — partially overlapping ones are refused. On rejection the gate and
+  the stretch between target and gate return to `pending` in a single transaction
+  and the **reviewer's note is injected into the reopened step's prompt**
+  (a "REVISÃO REPROVADA — refaça o trabalho (ciclo N de M)" block), so you do
+  **not** stitch the feedback into the prompt yourself. Once the cycles are spent,
+  a rejection behaves as it always did (fail + cascade), with an error saying it
+  was rejected after N/N review cycles.
   Step and edge `id`s are **optional** — the hub generates them (and replaces
   non-uuid ones like `"s1"`, which the backend rejects); `fromStepId`/`toStepId` also
   accept a `stepKey`. Read the returned `steps[].id` if you plan to `update_squad`.
