@@ -749,6 +749,13 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   If a scope can't be consulted, the answer is `partial: true` + `unavailable: [{ scope,
   reason }]` and that scope is **omitted** — absence means "could not verify", never "there
   is no integration".
+  **Near-homonyms are flagged.** When two integrations of the **same type** have names
+  differing only by case, accent, whitespace or punctuation — or not at all — the answer
+  gains `ambiguousNames: [{ type, normalizedName, identicalNames, integrations: [...] }]`
+  and a warning in `hint`. A real org has `Z2PAY` (connected) sitting next to `Z2Pay`
+  (`connectionStatus: "error"`): customer data, not a bug — but whoever picks **by name**,
+  and an LLM picks by name, is guessing. **Always pick by `integrationUuid`.** With no
+  collision the field is absent and the response is unchanged.
 - `mcp__afl__list_data_sources` (`datasources:read`) → `{ personal, organization }`.
   `scope: "all"` (the default) no longer blows up in a runtime error, and
   `scope:"all"` + `fields:"full"` is a valid combination.
@@ -820,12 +827,28 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   - **`list_genie_spaces` separates four facts that used to arrive as the same silence.**
     An **empty list** means Databricks answered and there are no spaces the service
     principal can see (the integration exists and is valid — a workspace permission
-    matter). **404** means there is no Databricks integration in this scope at all — a
-    different statement from "no spaces". **400** means the stored credential expired:
-    **reconnect the workspace, do not recreate the integration**, it is there. **5xx / no
-    status** means nothing was verified — neither the integration nor the spaces — so it
-    justifies a retry and never a conclusion. (403 comes back as `blocked`: you are not an
-    active member of that org.)
+    matter). **404 without `integration_uuid`** means there is no Databricks integration in
+    this scope at all — a different statement from "no spaces"; **404 with
+    `integration_uuid`** means the integration **exists** in that scope (the uuid was
+    already resolved) but is **not ACTIVE** — reactivate it; that is neither "no spaces"
+    nor "no integration". **400** means the stored credential expired: **reconnect the
+    workspace, do not recreate the integration**, it is there. **5xx / no status** means
+    nothing was verified — neither the integration nor the spaces — so it justifies a retry
+    and never a conclusion. (403 comes back as `blocked`: you are not an active member of
+    that org.)
+  - **`integration_uuid` decides the SCOPE — it is not just a tie-break.** Passing it
+    defines **where** the tool looks: a **personal** integration uuid is answered in the
+    **personal** scope even when the token is scoped to an organization, and the answer
+    carries a `scopeNote` naming **both** scopes. This closes a real defect: the uuid came
+    straight out of `list_integrations` (`personal: [{ integrationUuid: "56a70b96-…" }]`),
+    was ignored, and the tool replied *"there is no Databricks integration configured in
+    organization …"* — a confident answer about a different target, from which one
+    concludes Databricks does not exist. A uuid **this token cannot read** (someone else's,
+    or another org's) is **denied** as `blocked`, with the **same** message as a
+    non-existent uuid — telling them apart would confirm that someone else's resource
+    exists. That denial never says "there is no integration". An organization uuid requires
+    **active membership**, and a failure to *evaluate* that authorization denies as a
+    precaution — it never means "does not exist".
   - **Google sources must declare the service** (rule 10). On `google_drive_file`,
     `google_drive_folder` and `google_services_data`, `config.googleSourceType` is
     **required** — `gmail | drive | calendar | meet | sheets | docs | slides | forms`
