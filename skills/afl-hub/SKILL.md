@@ -893,10 +893,47 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     `config.selectedToolsMetadata` of `get_data_source` — internal configuration doing the
     job of API documentation, under a scope a read-only collector has no other reason to
     hold.
-- **`mcp__afl__connect_agent_data_source`** `{ agent_id, data_source_id, sync_frequency? }`
-  and **`mcp__afl__disconnect_agent_data_source`** `{ agent_id, data_source_id }`
+- **`mcp__afl__connect_agent_data_source`**
+  `{ agent_id, data_source_id, sync_frequency?, allow_write? }` and
+  **`mcp__afl__disconnect_agent_data_source`** `{ agent_id, data_source_id }`
   (`datasources:write`) attach/detach a source — both **org-aware** (org agent → b2b path,
-  caller must be org admin/owner; else the personal connection).
+  caller must be org admin/owner; else the personal connection). `allow_write` grades the
+  new link's write permission at connect time; omitting it inherits the source (and, on a
+  re-connect, keeps whatever the link already had).
+- **`mcp__afl__update_agent_data_source_connection`**
+  `{ agent_id, data_source_id, allow_write? }` (`datasources:write`) changes the write
+  permission of a link that **already exists**, without disconnecting and reconnecting —
+  a reconnect wipes the link's configuration, and that detour was the whole reason this
+  tool exists. It identifies the link by the **pair** `agent_id` + `data_source_id`, the
+  two ids `list_agents` and `list_data_sources` already hand you. That pair is the natural
+  key on the org side; on the personal side the key is the connection's own `id`, which
+  **no hub read publishes**, so the tool resolves the pair to it internally (the same way
+  `disconnect_agent_data_source` has always done). Org agent → b2b path, caller must be an
+  org admin/owner; a non-admin is refused **before** anything is written.
+  - **Writing is an INTERSECTION: source ∧ link.** The source grants
+    (`allow_agent_write`, via `update_data_source`); the link **restricts**. The two
+    defaults are deliberately opposite — a source with no opt-in does **not** write; a
+    link with no opt-in **inherits** the source. So `allow_write: true` on a link whose
+    source is read-only **still does not write**: it is an opt-in, never a grant. Fix the
+    source, not the link. Conversely `allow_write: false` denies even when the source is
+    writable.
+
+    | link `allow_write` | source `allow_agent_write: false` | source `allow_agent_write: true` |
+    |---|---|---|
+    | `true` | **no write** (opt-in is not a grant) | writes |
+    | `false` | no write | **no write** (the link denies) |
+    | omitted / `null` (inherit) | no write | writes |
+
+  - The response echoes what was **stored** (`allowWrite`) and, whenever the source could
+    be read, the already-computed `effectiveAllowWrite` — that difference is what keeps
+    you from repairing the wrong side ("I stored `true` and it still won't write" means
+    the SOURCE is read-only). It takes effect **immediately**: the agent's toolset cache
+    is invalidated on both paths.
+  - **This is what makes least privilege free.** Before, one agent reading and another
+    reading+writing the same Jira board, mailbox or sheet meant **duplicating the data
+    source** — two rows, two syncs, two things to keep aligned. Now it is one source and
+    two links: connect both, then `update_agent_data_source_connection` with
+    `allow_write: false` on the one that should only read.
 - **"This agent has no access to the source" now separates a MISSING CONNECTION from the
   WRONG SCOPE.** When an **organization** agent reads a source that is in fact the
   caller's **personal** one, the refusal says the problem is the source's **scope** —
