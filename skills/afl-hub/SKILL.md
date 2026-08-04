@@ -71,8 +71,10 @@ belonged. Some tools also keep legacy aliases (`imageUrl`, `file_url`); they are
 for compatibility, `url` is the contract.
 
 **3. Some tools answer before the work is done.**
-`execute_in_background` obviously, but also `criar_app_web`, which returns while the
-app is still being built (observed: 4m17s between the reply and the app existing).
+`execute_in_background` obviously, but also `criar_app_web` — which, note, is **not a
+hub tool**: you reach it by asking an agent through `chat_with_agent` (see "Generators
+you drive through the agent, not directly" below). It returns while the app is still
+being built (observed: 4m17s between the reply and the app existing).
 The row, though, is **reserved at dispatch**: the app shows up in
 **`mcp__afl__listar_apps`** (`agents:read`) from the first instant, as
 `status: "gerando"`. So a missing reply is answerable instead of a guess — confirm
@@ -1070,6 +1072,31 @@ the **portal**, not the source row — several sources pointing at the same HubS
 are not ambiguous. And it has no source param to freeze, so the fix there is to declare
 the carrier `agente` on the capability (its connection picks the portal), or to keep a
 single account active.
+
+## Generators you drive through the agent, not directly
+
+Looking for `criar_app_web`, `editar_app_web`, `criar_pagina_web`, `gerar_imagem`? They
+are **deliberately not hub tools**. Ask an agent for them with `chat_with_agent` — the
+agent has them natively, and the result lands in the AFL product.
+
+The criterion is not "it generates something". It is **whether what comes back is usable
+outside the chat**:
+
+- `criar_documento` and the document editors **are** hub tools — they return a real file
+  in storage with a download `url`, and the hub consumes files by URL everywhere.
+- `criar_app_web`, `criar_pagina_web` and the image generators **are not** — they publish
+  a resource of the AFL product (or return markers that only the AFL chat knows how to
+  materialize). Handed to an MCP client, the reply is not something you can use on your
+  own; if you want to generate that kind of content client-side, use your own model.
+
+**Reading them back is a different question, and reading IS exposed** — precisely because
+these generators answer before finishing. `listar_apps` and `get_app_web` are
+first-class hub tools (`agents:read`), and `listar_paginas_web` is reachable as well. That
+asymmetry is the design, not an oversight: without the read you would be stuck between
+"don't call it again" and "I can't tell whether it exists", and the safe-looking move —
+recreating — produces a second app with a second link.
+
+So: **drive the generator through the agent, verify with the reader.**
 
 ## Known limitations (current)
 
