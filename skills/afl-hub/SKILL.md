@@ -333,7 +333,7 @@ The hub is **no longer read-only**. Beyond the reads above there are now write a
 orchestration tools, each gated by its own scope (`missing scope ...` = the session
 lacks it — surface verbatim):
 
-- **Write (~52 tools, scope `tools:write`)** — one MCP tool per native write executor
+- **Write (scope `tools:write`)** — one MCP tool per native write executor, dozens of them
   (e.g. create/update issues, send messages, mutate provider records). Each takes an
   `agentId` plus the native tool's params. **Destructive actions return a
   `confirmationId` instead of executing** — call `mcp__afl__confirm_action`
@@ -635,8 +635,8 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   **Start with `visibility`, not with the whole catalog.** It takes `personal |
   organizational | platform`, and it is the first filter because an unfiltered listing is
   dominated by the platform skills, which are the same for everyone and usually not what
-  you are looking for: one `limit: 200` call with no filter returned **170 skills (152
-  platform, 18 of the org) — 94,069 characters over 1,898 lines**, and blew the MCP
+  you are looking for: on 2026-08-04, one `limit: 200` call with no filter returned **170 skills
+  (152 platform, 18 of the org) — 94,069 characters over 1,898 lines**, and blew the MCP
   client's response limit. 89% of that was the part nobody asked for.
   `visibility: "organizational"` (+ `organization_id`) answers "what has THIS org built";
   `"platform"` (+ `search`) answers "is there a native capability for X"; `"personal"` is
@@ -685,7 +685,9 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   turn whether the model uses it or not, so counting injections would be a turn count
   wearing a usage costume: dead and live skills would score identically. `null` is the
   honest answer there; `0` would not be.
-- **What a `native-*` platform skill actually adds:** the ~80 native tools are the agent's
+- **What a `native-*` platform skill actually adds:** the native tools — dozens of them; run
+  `list_skills { visibility: "platform" }` for the current picture instead of trusting a number
+  written here — are the agent's
   **default capability** — an agent with zero skills enabled already generates PDFs, writes
   Notion pages, searches Jira. What gates a tool is the **integration/data source connected
   to the agent** (and `allow_agent_write` for writes), not a skill. A `native-*` skill is
