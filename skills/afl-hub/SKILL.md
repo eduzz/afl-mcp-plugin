@@ -288,6 +288,26 @@ _meta: {
   wearing a spend limiter's clothes, where reading 3 emails and reading 200 cost the
   same.
 
+**Deterministic tools carry `_meta.toolCalls` too.** Every hub tool returns the same
+record — with a single entry, the call itself:
+
+```jsonc
+// google_gmail_send, google_calendar_create, mcp_call_tool, list_agents, …
+_meta: { toolCalls: [{ tool: "google_gmail_send", status: "ok", durationMs: 934 }] }
+```
+
+- Same `status` vocabulary. A destructive write that returned a `confirmationId`
+  reads `pending_confirmation` — **nothing ran**; a missing scope or an inactive
+  membership reads `blocked`, which is **not** an integration failure.
+- **`llm` is absent** — the key does not exist. Not `null`, not zeroed: there was no
+  model. A zeroed `llm` would assert a zero-cost model call, which is false.
+- Use it to audit writes uniformly: before this, the only proof an effect happened
+  was `isError: false` plus each tool's own JSON (`data.threadId`, `data.eventId`) —
+  a per-tool contract, with no `durationMs` and no shared status.
+- Arguments that fail schema validation are rejected by the protocol **before** the
+  handler, and that response has no `_meta` — there the problem is the call, not the
+  execution.
+
 ### Write & action tools (Fase 3)
 
 The hub is **no longer read-only**. Beyond the reads above there are now write and
