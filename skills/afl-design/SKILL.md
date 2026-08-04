@@ -17,7 +17,10 @@ Everything in AFL runs in the context of an **agent** you choose — the agent c
 the organization, the connected sources and the credentials. So the design question
 comes before the tool question. This skill answers the design question. For tool
 signatures, return shapes and parameter traps, read **`afl-hub`** — do not restate
-them here.
+them here. And when the structure already exists somewhere else — a pipeline running in
+CrewAI/LangGraph, a repo of prompts, a runbook — read **`afl-migrate`** first: porting is
+translating the intent, not copying the shape, and starting from the ritual is the wrong
+starting point when a working one is already in front of you.
 
 ## The one question that routes everything
 

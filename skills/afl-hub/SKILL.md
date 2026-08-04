@@ -251,6 +251,25 @@ JSON, no model in the middle); for a JUDGEMENT
     `list_mcp_tools { data_source_id }` → `mcp_call_tool { data_source_id, tool_name,
     params }`.
 
+- **Discovery — what EXISTS, answered deterministically** (all `datasources:read` except
+  the skills one; none of them writes anything):
+  - `mcp__afl__list_integrations` — which integrations are connected, whose account each
+    one is, and the `integrationUuid` that `create_data_source` wants.
+  - `mcp__afl__list_source_types` — the closed catalog of `source_type`, with aliases,
+    which types need an `integration_uuid` and the config each one requires.
+  - `mcp__afl__list_genie_spaces` — the Databricks Genie spaces the connected workspace
+    exposes, with the space `id` the `native-databricks-genie-*` skills ask for.
+  - `mcp__afl__list_organization_groups` — the org's groups (name → id), the input to
+    `group_ids`.
+  - `mcp__afl__list_skills { visibility: "platform", search }` — whether a native
+    capability for X exists at all.
+
+  These belong to the FACT side of the line. The native skill
+  **`native-system-integrations-list` answers a similar question, but it answers it through
+  an agent** — the reply is LLM prose, and by this hub's own rule (rule 9) prose is not
+  evidence. Use it to help a user reason about their setup; **never** to establish that an
+  integration is or isn't connected. For that, call the tool.
+
 The read tools **auto-resolve** the provider's source from the agent's connections.
 If an agent has more than one source of a provider, the tool returns an error asking
 you to specify the source — surface that to the user.
@@ -444,6 +463,18 @@ lacks it — surface verbatim):
   `hasContent`/`contentChars`), because polling used to re-download every finished
   step's full output on every call. Ask for content only when you need it:
   `fields: "full"` (everything, once at the end) or `step_key`/`step_id` (one step).
+  **Content is not evidence of execution.** Each step also carries **`toolCallsCount`**
+  (and `toolCalls` with tool name, status and duration when there were any).
+  `toolCallsCount: 0` with a big `contentChars` means the agent only *wrote text* —
+  a plan or a promise ("awaiting the knowledge-base lookup") — without consulting
+  anything, and by every other field it looks exactly like a real dossier
+  (`completed`, `hasContent: true`). Same rule as `_meta.toolCalls` in
+  `chat_with_agent`: cross the prose with the record. `baseContextTokens` shows the
+  step's context floor — the input tokens it pays before any tool runs, which is
+  what tells you whether a step is over-equipped with skills. The run envelope's
+  **`totalTokens`/`totalCost`** (USD) are the aggregate consumption, and they are
+  updated **during** the run (including while it sits in `waiting_approval`), not
+  only at the end.
   A step still in flight also carries its **deadline and proof of life**, so you can
   tell working from stuck without guessing: `timeoutSeconds`/`maxAttempts` (the
   contract that run froze), `elapsedSeconds`, `heartbeatAt`/`heartbeatAgeSeconds`,
@@ -515,9 +546,17 @@ lacks it — surface verbatim):
   manual triggering.
   Both `create_squad` and `update_squad` accept `schedule_enabled`, `schedule_frequency`
   (`realtime` = every 10min · `every_15_minutes` · `hourly` = minute 0 · `every_6_hours` ·
-  `daily` = 09:00 · `weekly` = Monday 09:00 · `custom`), plus `custom_schedule_days`
+  `daily` = 09:00 · `weekly` = Monday 09:00 · `monthly` · `custom`), plus
+  `custom_schedule_days`
   (`0`=Sunday … `6`=Saturday) and `custom_schedule_time` (`HH:MM`, server timezone) —
-  the last two are **required** with `custom` and ignored otherwise. Passing
+  the last two are **required** with `custom` and ignored otherwise, and
+  `schedule_day_of_month` (`1`–`31`, **required** with `monthly` together with
+  `custom_schedule_time`).
+  **Quarterly / four-monthly cadences are `monthly` + `schedule_months`** — an array of
+  months `1`–`12` (`[3,6,9,12]` = quarterly committee, `[12,4,8]` = four-monthly strategic
+  planning cycle, `[1,7]` = biannual). Omitting it means every month, so existing monthly
+  squads are unaffected; it is **rejected** with any frequency other than `monthly`
+  (a field accepted and ignored would silently run the ritual 12× a year). Passing
   `schedule_frequency` without `schedule_enabled` turns the schedule **on** (the response
   says so in `warnings`). A scheduled squad only fires while `is_active: true`, so a
   scheduled draft warns you. The tools reject combinations that would never fire
@@ -525,7 +564,8 @@ lacks it — surface verbatim):
   is made against the **merged** state, so `{ squad_id, custom_schedule_time: "18:45" }`
   works on a squad that is already `custom`. Scheduled runs impersonate the squad's
   creator. `list_squads` reports each squad's schedule state (`scheduleEnabled`,
-  `scheduleFrequency`, `customScheduleDays`, `customScheduleTime`).
+  `scheduleFrequency`, `customScheduleDays`, `customScheduleTime`, `scheduleDayOfMonth`,
+  `scheduleMonths`).
 - **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
   automation (fire-and-forget) → `{ queued, correlationId }`; read history with
   **`mcp__afl__get_automation_result`** (scope `automations:read`).
@@ -562,20 +602,46 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   enough, so a refusal naming "admin/owner" means the role is missing, not the id. Don't
   route around it via `chat_with_agent` + the native `gerenciar_agentes` tool: that path
   enforces the same rule now.
-- **Put an org agent in a group** — `mcp__afl__list_organization_groups`
-  `{ organization_id? }` (scope `agents:read`) lists the org's groups
-  (`{ id, name, description, groupType, hierarchyLevel }`); omit the id to use the token's
-  org. Resolve the group **by name here** and pass its `id` in `group_ids` — never guess a
-  group uuid. `group_ids` is **REPLACE, not append**: the list is the desired final state,
+- **Put an org agent in a group — and create the group if it isn't there.**
+  `mcp__afl__list_organization_groups` `{ organization_id? }` (scope `agents:read`) lists
+  the org's groups (`{ id, name, description, groupType, hierarchyLevel }`); omit the id to
+  use the token's org. Resolve the group **by name here** and pass its `id` in `group_ids` —
+  never guess a group uuid. When the group does not exist yet,
+  **`mcp__afl__create_organization_group`** `{ organization_id?, name, description?,
+  group_type?, parent_group_id?, color?, icon?, responsibilities?, metadata? }` (scope
+  `agents:write`, org **admin/owner**) creates it and returns the `id` you pass straight to
+  `group_ids` — building a whole org over MCP used to stop exactly here.
+  **`mcp__afl__update_organization_group`** `{ group_id, organization_id?, … }` patches it
+  (only the fields you send; an empty patch is refused instead of returning the group
+  untouched and looking like it applied). `group_type` is `time | area | contexto | papel |
+  organizacao`. Two things that decide whether your first call works:
+  - **`hierarchy_level` is NOT a parameter.** The level is **derived** from
+    `parent_group_id` — no parent = root, level 1; with a parent = the parent's level + 1,
+    and the parent must belong to the **same organization**. Accepting the field would be
+    offering a way to persist an incoherent tree.
+  - **`name` is UNIQUE within the organization.** Repeating an existing name comes back as
+    `Nome já está em uso` — that is not a create failure to retry, it is a **rename**:
+    resolve the existing group with `list_organization_groups` and use
+    `update_organization_group`.
+  `group_ids` is **REPLACE, not append**: the list is the desired final state,
   groups left out are unlinked and `[]` unlinks all, which makes resending the same list
   idempotent. Omitting it in `update_agent` leaves the groups untouched — read the current
   ones from `get_agent` first when you mean to add to them. In `create_agent` the linking
   happens *after* the agent exists, so a failure there returns the agent plus a `warning`:
   fix it with `update_agent`, don't recreate. `group_ids` on a personal agent is an error.
 - **Skills** — `mcp__afl__list_skills`
-  `{ type?, category?, search?, organization_id?, page?, limit?, fields? }`
-  and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`). The listing is
-  **paginated and compact by default** (`limit` 50, cap 200): it returns what you need to
+  `{ visibility?, type?, category?, search?, organization_id?, page?, limit?, fields? }`
+  and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`).
+  **Start with `visibility`, not with the whole catalog.** It takes `personal |
+  organizational | platform`, and it is the first filter because an unfiltered listing is
+  dominated by the platform skills, which are the same for everyone and usually not what
+  you are looking for: one `limit: 200` call with no filter returned **170 skills (152
+  platform, 18 of the org) — 94,069 characters over 1,898 lines**, and blew the MCP
+  client's response limit. 89% of that was the part nobody asked for.
+  `visibility: "organizational"` (+ `organization_id`) answers "what has THIS org built";
+  `"platform"` (+ `search`) answers "is there a native capability for X"; `"personal"` is
+  yours. Omitted = everything.
+  The listing is **paginated and compact by default** (`limit` 50, cap 200): it returns what you need to
   CHOOSE a skill, not its full config — `fields: "full"` or `get_skill` for that. Same for
   `mcp__afl__list_data_sources` (`scope`, `page`, `limit`, `fields`, `source_type`), whose
   items omit absent fields entirely instead of asserting `null`.
@@ -632,9 +698,28 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
 Data sources (Jira/Notion/Google/DB/API…) are a **separate** subsystem from skills —
 they live in `user_data_sources` and link to agents via `agent_data_connections`.
 **Prerequisite:** for a business integration (Jira, HubSpot, Microsoft, Notion) the
-integration must already be **connected via OAuth** (in the AFL UI); its `integration_uuid`
-comes from there. Find sources/ids with `list_data_sources`.
+integration must already be **connected via OAuth** (in the AFL UI) — but its
+`integration_uuid` no longer has to be copied from a screen: **`mcp__afl__list_integrations`**
+returns it, and the `integrationUuid` it gives you is *literally* the value
+`create_data_source` expects in `integration_uuid`. Find existing sources/ids with
+`list_data_sources`; find integration uuids with `list_integrations`; find the accepted
+`source_type`s with `list_source_types`.
 
+- **`mcp__afl__list_integrations`** (`datasources:read`)
+  `{ scope?, organization_id?, integration_type?, include_disconnected?, page?, limit? }`
+  lists the connected integrations (personal and/or the org's) with the identity of the
+  account behind each: `connected`, `connectionStatus`, `grantedScopes` (which is what
+  separates "expired token" from "that account never authorized this service") and
+  `needsReconnect`. Org scope needs membership (member is enough).
+  **Why the tool exists:** `list_data_sources` only ever exposes the uuid of an integration
+  some source is **already** using, so an integration that was connected and never used was
+  undiscoverable through the hub — the chain from "connect in the UI" to "create the source"
+  broke exactly there. **Only connected ones by default** (`include_disconnected: true`
+  brings the rest, as `connected: false`), because the integration row **survives the
+  removal of the account**: without the filter, a removed account still reads as connected.
+  If a scope can't be consulted, the answer is `partial: true` + `unavailable: [{ scope,
+  reason }]` and that scope is **omitted** — absence means "could not verify", never "there
+  is no integration".
 - `mcp__afl__list_data_sources` (`datasources:read`) → `{ personal, organization }`.
   `scope: "all"` (the default) no longer blows up in a runtime error, and
   `scope:"all"` + `fields:"full"` is a valid combination.
@@ -671,14 +756,47 @@ comes from there. Find sources/ids with `list_data_sources`.
   With `organization_id` (or an org-scoped token) the source belongs to the
   **organization** — caller must be org **admin/owner**, and it is created org-wide (no
   group scoping; use the org UI when the source must be scoped to a group). Without an
-  org it is **personal**. `source_type` is canonical (business integrations carry the
-  `_data` suffix: `jira_data`, `hubspot_data`, `notion_database`, `microsoft_365_data`,
-  `google_sheet`, `api_endpoint`, `database_table`, `mcp_server`, …; aliases like
-  `jira`/`notion` are normalized). Provider specifics go in `config` (e.g. Jira →
+  org it is **personal**. **`source_type` is a closed, canonical list** — the tool's own
+  description now spells it out instead of trailing off in "…", so there is nothing left to
+  discover by trial: `google_sheet`, `google_forms`, `google_doc`, `google_drive_file`,
+  `google_drive_folder`, `google_services_data`, `google_sheet_public`, `google_doc_public`,
+  `notion_page`, `notion_database`, `slack_channel`, `slack_data`, `databricks_table`,
+  `databricks_genie`, `github_repo`, `api_endpoint`, `webhook`, `database_table`,
+  `web_scraping`, `mcp_server`, `hubspot_data`, `linkedin_data`, `microsoft_365_data`,
+  `tuya_devices`, `whatsapp_data`, `jira_data`, `education_platform`. Aliases (`jira`,
+  `notion`, `databricks`, `postgres`, `sheets`, `mcp`, …) are normalized, and an
+  unrecognized type is **refused listing the valid ones** rather than silently accepted.
+  **`mcp__afl__list_source_types`** (`datasources:read`, no args, writes nothing) returns
+  that catalog machine-readable: per type the group, whether it `requiresIntegrationUuid`,
+  the `requiredConfig` without which creation is refused, and the type's `note`, plus the
+  full alias map. It is the deterministic answer to "does AFL support provider X as a
+  source?" — before it, the only way to find out was to attempt a write and read the error.
+  Provider specifics go in `config` (e.g. Jira →
   `{ jiraProjectKeys, jiraJqlFilter }`; Notion → `{ notionDatabaseId }`; API →
   `{ apiEndpoint, apiMethod }`). A source is created **read-only** unless you pass
   `allow_agent_write: true` — plan for that: a fresh source + connect is not enough for
   the agent to write anywhere.
+  - **Databricks/Genie is the exception that is NOT a data source.** `databricks_genie`
+    (and `databricks_table`) *are* valid `sourceType`s, so the call is **ACCEPTED** — and
+    it **enables nothing**: asking Genie a question is a **platform SKILL** capability
+    (`native-databricks-genie-*`) over the organization's Databricks integration, not a
+    source capability. The trap is that the accepted-and-inert source looks exactly like a
+    working one. The chain that actually works:
+    `list_integrations { integration_type: "databricks" }` (get the workspace) →
+    **`mcp__afl__list_genie_spaces`** `{ organization_id?, integration_uuid? }`
+    (`datasources:read`) → `list_skills { search: "genie" }` → `enable_agent_skill` on the
+    carrier agent. The space `id` `list_genie_spaces` returns (32 hex chars) is what the
+    skill asks for — it is **not** an `integration_uuid` and is not used in
+    `create_data_source`.
+  - **`list_genie_spaces` separates four facts that used to arrive as the same silence.**
+    An **empty list** means Databricks answered and there are no spaces the service
+    principal can see (the integration exists and is valid — a workspace permission
+    matter). **404** means there is no Databricks integration in this scope at all — a
+    different statement from "no spaces". **400** means the stored credential expired:
+    **reconnect the workspace, do not recreate the integration**, it is there. **5xx / no
+    status** means nothing was verified — neither the integration nor the spaces — so it
+    justifies a retry and never a conclusion. (403 comes back as `blocked`: you are not an
+    active member of that org.)
   - **Google sources must declare the service** (rule 10). On `google_drive_file`,
     `google_drive_folder` and `google_services_data`, `config.googleSourceType` is
     **required** — `gmail | drive | calendar | meet | sheets | docs | slides | forms`
@@ -936,6 +1054,17 @@ single account active.
   connected sources match the name EXACTLY, resolution fails listing the candidates with their
   ids (it used to pick one arbitrarily, so a write could land on the wrong source). Pass the
   id to disambiguate; a partial match still resolves to the first hit.
+- **Deleting an organization group is UI-only.** The hub creates and updates groups
+  (`create_organization_group` / `update_organization_group`) but does not delete one, and
+  that is deliberate: the removal is a **cascade** — the group *and* every membership
+  association with it — not a soft delete, and its real blast radius is a change in
+  **authorization** that the hub cannot show you before the fact. Do it on the AFL org
+  screen, with the members in front of you.
+- **`list_integrations` reports STORED state, not a live probe.** `connected`,
+  `connectionStatus` and `grantedScopes` are what the platform recorded at connect/refresh
+  time; the row also survives the account being removed on the provider's side. So a
+  `connected: true` is "nothing has told us otherwise", not "we just checked". When it
+  matters, the proof is a read through the integration.
 - **An `mcp_server` source's tool catalog is a snapshot of its configuration** —
   `list_mcp_tools`/`mcp_call_tool` only see the tools recorded when the source was last
   saved, so a tool added on the MCP server afterwards needs the source edited and saved

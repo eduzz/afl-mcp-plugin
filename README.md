@@ -14,9 +14,10 @@ O plugin instala duas coisas de uma vez:
   - **Squads e automações (novo):** disparar squads e automações da sua organização e acompanhar o resultado.
   - **Tarefas longas (novo):** rodar uma tarefa em segundo plano e buscar o resultado depois.
   - **Descoberta de skills (novo):** listar e ler as skills do sistema e as que estão habilitadas em cada agente, e usar prompts prontos (como `use_skill`) para acionar uma skill específica pelo seu agente.
-- **Dois guias embutidos** que ensinam o Claude Code a usar tudo isso do jeito certo — você não precisa decorar comando nenhum, é só pedir em linguagem natural:
+- **Três guias embutidos** que ensinam o Claude Code a usar tudo isso do jeito certo — você não precisa decorar comando nenhum, é só pedir em linguagem natural:
   - **`afl-hub`** — *como chamar*: as ferramentas, o que cada retorno significa e as armadilhas que fazem a primeira tentativa falhar.
   - **`afl-design`** — *o que criar*: quando a resposta é um agente, uma skill, uma fonte de dados, um documento, um squad ou um app web; em que ordem montar; e como não dar mais acesso do que o necessário. Útil quando você está estruturando uma área ou um processo no AFL pela primeira vez, ou quando uma escrita falha e o conserto é de estrutura, não de parâmetro.
+  - **`afl-migrate`** — *como trazer o que já existe*: portar para o AFL uma esteira que hoje roda em outro lugar (OpenSquad, CrewAI, LangGraph, um repositório de prompts, um runbook). O que muda de forma na travessia, quais disciplinas da origem não transferem, e as armadilhas que só aparecem quando você roda a primeira vez.
 
 Exemplos do que dá para pedir depois de instalar:
 
@@ -63,7 +64,7 @@ Para conferir os guias embutidos, rode:
 /skill list
 ```
 
-Devem aparecer `afl-mcp:afl-hub` e `afl-mcp:afl-design`.
+Devem aparecer `afl-mcp:afl-hub`, `afl-mcp:afl-design` e `afl-mcp:afl-migrate`.
 
 ## Como usar no dia a dia
 
