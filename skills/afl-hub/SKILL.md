@@ -336,6 +336,20 @@ lacks it — surface verbatim):
     is a declared no-op (`alreadyInTargetStatus`), never an error. So don't loop
     `jira_descobrir { kind: "transitions" }` + one hop at a time — that was 13
     calls to close 3 cards.
+  - **`google_gmail_send` replies INSIDE the thread.** Pass `reply_to_message_id`
+    = the `id` `google_gmail_read` returned; it derives the thread, the RFC 5322
+    `In-Reply-To`/`References` headers, the thread's subject and the recipient, so
+    the reply lands in the original conversation in Gmail *and* in Outlook/
+    Thunderbird. `to` and `subject` are optional **only** in that case — the
+    `inputSchema` marks just `body` (plus `agentId`) as required because the
+    requirement is CONDITIONAL, not because a plain send may omit them: a send
+    without `reply_to_message_id` that drops `to`/`subject` is refused by the tool
+    with a message naming exactly what is missing, and nothing goes out. If the
+    original message can't be read, the reply is refused too, rather than leaving
+    as a loose "Re:" email that splits the conversation in two. Manual fallbacks
+    when you only have part of it: `thread_id` (threads in Gmail only, and needs
+    the same subject as the thread) and `in_reply_to`/`references` (thread
+    everywhere else).
   - **`jira_criar_issue`: `epic` and `parent_key` both take an issue key.** The
     epic is applied as the issue's parent, and `parentApplied` in the result tells
     you whether it took — no second read needed.
