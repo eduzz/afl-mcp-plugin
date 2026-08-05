@@ -263,6 +263,10 @@ JSON, no model in the middle); for a JUDGEMENT
     exposes, with the space `id` the `native-databricks-genie-*` skills ask for.
   - `mcp__afl__list_organization_groups` — the org's groups (name → id), the input to
     `group_ids` in `create_agent`/`update_agent` **and** in `create_squad`/`update_squad`.
+  - `mcp__afl__get_organization_topology` (scope `agents:read`) — the org **graph**: who
+    exists, in which group, and what is wired to what. This is the one that answers "which
+    other agents live in this org" and "where does this resource actually live" — see
+    "Reading the org's shape" below.
   - `mcp__afl__list_skills { visibility: "platform", search }` — whether a native
     capability for X exists at all.
 
@@ -650,6 +654,34 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   enough, so a refusal naming "admin/owner" means the role is missing, not the id. Don't
   route around it via `chat_with_agent` + the native `gerenciar_agentes` tool: that path
   enforces the same rule now.
+- **Reading the org's shape — `mcp__afl__get_organization_topology`**
+  `{ organization_id?, detail?, node_types?, max_nodes? }` (scope `agents:read`).
+  Returns the organization **graph** — organization, groups, members, agents, data sources
+  and integrations as nodes, plus the edges between them — **already cut down to what you
+  can see**. Use it before acting: to find an org agent's **sibling agents**, to see which
+  group something belongs to, and to locate **where a resource lives** (which source, which
+  integration, which group) instead of guessing or spending a `chat_with_agent` on it.
+
+  - **The result is scoped to YOU, server-side.** There is no user parameter and there will
+    not be one: the cut is decided from the bearer token's user. `scope` (`"all"` |
+    `"groups"`) and `visibleGroupIds` in the response tell you **which** cut you are looking
+    at. A member who only sees group A never receives group B's nodes. Reading it requires
+    an **active** membership; a refusal comes back as `blocked`, and a failure to *evaluate*
+    the membership also refuses (unavailable never means authorized).
+  - **The default is compact, on purpose.** `detail: "compact"` (default) gives `counts`
+    (per-type totals for the **whole graph in your scope**), `visibleGroupIds`, and nodes as
+    `{ id, type, label, sub? }`. It **omits every edge** and each node's `meta`. Ask for
+    `detail: "full"` when you need the relations — edge `kind` is `org | pertence | acessa |
+    depende | habilita | compoe | sequencia | executa | publica`.
+  - **`node_types` narrows the presentation, not the scope** (`counts` still reflects
+    everything you can see), and `max_nodes` (default 250, max 5000) truncates **with a
+    `truncated` block** naming what was dropped per type — repeat with `node_types` for the
+    part you still need.
+  - **A partial graph is never presented as complete.** `partial: true` plus `unavailable[]`
+    name what was not collected: today `squads`, `steps`, `skills` and `apps` come back as
+    `not_implemented_v1`, and cross-service reads that failed appear as `read_failed`.
+    As everywhere in this hub, **a missing node means this listing did not bring it — never
+    that it does not exist.**
 - **Put an org agent in a group — and create the group if it isn't there.**
   `mcp__afl__list_organization_groups` `{ organization_id? }` (scope `agents:read`) lists
   the org's groups (`{ id, name, description, groupType, hierarchyLevel }`); omit the id to
@@ -1029,7 +1061,7 @@ Sampling is not supported.
   `skills:read`, `skills:write`, `datasources:read`, `datasources:write`, `squads:read`,
   `squads:run`, `squads:write`, `automations:read`, `automations:run` (or `*`). Reads/chat
   need `tools:read`/`agents:chat`; writes need `tools:write`; agent CRUD and
-  `list_organization_groups` need
+  `list_organization_groups`/`get_organization_topology` need
   `agents:read`/`agents:write`; skill CRUD needs `skills:read`/`skills:write`; data-source
   CRUD needs `datasources:read`/`datasources:write`; squads need their own (`squads:read`
   to list/read, `squads:run` to fire, `squads:write` to create/edit); automations likewise.
