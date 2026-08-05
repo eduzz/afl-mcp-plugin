@@ -125,9 +125,11 @@ text comes out of an LLM, and *fabricated* success reads exactly like real succe
 an agent reported "Ferramenta `google_calendar_read` — Status: ✓ Sucesso — Nenhum
 evento encontrado" for a call that **never happened**, and that became a project
 decision ("the Calendar is connected, the agenda is empty") until something else
-disproved it. **Cross the narrative with `_meta.toolCalls` before treating any claim
-of execution as fact.** If the prose says a tool ran and it is not there with
-`status: "ok"`, it did not run. See "Reading `chat_with_agent`'s `_meta`" below.
+disproved it. **Cross the narrative with the turn record that comes as the SECOND
+text block of the reply** (`── AFL · registro verificável do turno ──`) before
+treating any claim of execution as fact. If the prose says a tool ran and it is not
+there with status `ok`, it did not run; and `tools: NENHUMA` means the answer came
+from the prompt alone. See "Reading the turn record" below.
 
 **10. A Google data source must declare WHICH Google service it is.** The
 `source_type`s `google_drive_file`, `google_drive_folder` and `google_services_data`
@@ -207,8 +209,18 @@ JSON, no model in the middle); for a JUDGEMENT
     auto-resolved when the agent has a single database source.
   - `mcp__afl__list_mcp_tools` `{ data_source_id, organization_id? }` — the catalog of
     the tools **ENABLED** on an `mcp_server` source: `{ id, name, description,
-    inputSchema, required }` per tool, plus `dataSourceId`, `name`, `scope`
-    (`personal`|`organization`), `organizationId`, `allowAgentWrite`, `total` and `hint`.
+    inputSchema, required, **`write`** }` per tool, plus `dataSourceId`, `name`, `scope`
+    (`personal`|`organization`), `organizationId`, `allowAgentWrite`,
+    **`mcpConnectionLinked`**, `total`, `writeTools` and `hint`.
+    **`mcpConnectionLinked: false` means the source executes NOTHING** — the catalog is
+    recorded in config but the link to the MCP server (the `mcpConnectionId` column) is
+    missing, so every call fails with "Conexão MCP não configurada". Repair it with
+    `update_data_source { data_source_id, integration_uuid }` and check
+    `mcpConnectionLinked` in the answer. Check this **before** wiring the source to an
+    agent: a source in that state passes every read-side inspection and only breaks on the
+    first execution, which may be inside a squad, days later.
+    **`write: true`** marks the tools classified as writes — they are refused on a
+    read-only source and never reach the agent's prompt (see `allow_write` below).
     Org-aware: looks in the **organization** first (the token's, or `organization_id`,
     requiring active membership) and then in the token owner's **personal** scope — that
     order because the personal lookup filters by owner only and does NOT exclude org
@@ -244,6 +256,10 @@ JSON, no model in the middle); for a JUDGEMENT
       is refused here: the MCP connector's delete permission is granted **PER AGENT** and
       there is no carrier agent in this call. To delete, use `chat_with_agent` with an
       agent that has "Permitir exclusão" enabled for that MCP connector.
+    - **A WRITE tool on a read-only source** (`allowAgentWrite: false`) is refused. Which
+      tools count as writes is in the `write` field of `list_mcp_tools`.
+    - **A source with no link to the MCP server** (`mcpConnectionLinked: false`) is
+      refused saying the whole source is inert — not just this tool — and how to repair it.
     - **A dependency being unavailable NEVER becomes "source not found"** — the answer
       says it **could not verify** and warns you not to recreate the source (same rule as
       "an empty list means empty; a missing block means *not checked*" under "Manage data
@@ -280,9 +296,33 @@ The read tools **auto-resolve** the provider's source from the agent's connectio
 If an agent has more than one source of a provider, the tool returns an error asking
 you to specify the source — surface that to the user.
 
-### Reading `chat_with_agent`'s `_meta` — the verifiable record
+### Reading the turn record — the verifiable part of `chat_with_agent`
 
-The reply text is prose. `_meta` is what the platform measured:
+**The record you can actually read is the SECOND text block of the result.**
+`chat_with_agent` returns two blocks: the agent's reply, then a platform-generated
+record titled `── AFL · registro verificável do turno ──`:
+
+```
+── AFL · registro verificável do turno (gerado pela plataforma, não pelo agente) ──
+tools: 3 (ok: 2, blocked: 1)
+  1. buscar_base_de_conhecimento (ok, 412ms)
+  2. jira_search (ok, 1.2s)
+  3. google_gmail_send (blocked, 12ms): sem permissão de escrita nesta fonte
+llm: claude-sonnet-5 · in 12345 · out 678 · US$ 0.0421
+```
+
+`tools: NENHUMA` is the single most useful line in this skill: it means the answer
+came out of the prompt alone — no search, no read, no write — so any inventory,
+count, id or live state in it was **never checked against a source**. That is
+exactly the failure that made an agent list "8 agents" with three invented names
+while the correct list of eleven sat, indexed and retrievable, in its own knowledge
+base: telling the agent to search does not make it search.
+
+The same record is also in `_meta` (below), but **do not rely on `_meta`** — MCP
+clients generally do not surface protocol metadata to the model, which is why the
+visible block exists. Read the block; use `_meta` only if your client exposes it.
+
+`_meta` is what the platform measured:
 
 ```jsonc
 _meta: {
@@ -867,6 +907,14 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   `{ apiEndpoint, apiMethod }`). A source is created **read-only** unless you pass
   `allow_agent_write: true` — plan for that: a fresh source + connect is not enough for
   the agent to write anywhere.
+  - **`mcp_server` requires `integration_uuid`, and the answer tells you whether the link
+    took.** The runtime resolves the MCP server by a dedicated column, so a source created
+    without the integration would list, hold a full tool catalog and connect to an agent
+    while executing **nothing**. Creating one without `integration_uuid` is now **refused**
+    (nothing is created), and a successful create carries `mcpConnectionLinked: true`.
+    If it ever comes back `false`, the answer says so with a `warning`: do **not** wire that
+    source to an agent — repair it with `update_data_source { data_source_id,
+    integration_uuid }`, or build it in the UI.
   - **Databricks/Genie is the exception that is NOT a data source.** `databricks_genie`
     (and `databricks_table`) *are* valid `sourceType`s, so the call is **ACCEPTED** — and
     it **enables nothing**: asking Genie a question is a **platform SKILL** capability
@@ -932,6 +980,12 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     column stayed empty and the source stayed broken, so the obvious repair did not
     repair. The field is **not** required on update (the value may already be stored);
     an unrecognized value is refused, naming the accepted ones.
+  - **An `mcp_server` source gets its server link repaired here too.** The runtime
+    resolves the MCP server by the `mcpConnectionId` **column**, and neither
+    `integration_uuid` nor `config` used to write it — an inert source had no repair by
+    API at all. Now any update on an MCP source re-derives the column from its integration
+    (or from `integration_uuid` when you send one), and the answer carries
+    `mcpConnectionLinked` so you can confirm it took.
 - **`mcp__afl__create_mcp_connection`** (`datasources:write`)
   `{ name, url, headers?, auth_type?, auth_value?, dedupe_by_url? }` — registers an external
   MCP server as a connection and discovers its tools (handshake + `tools/list`), returning the
@@ -978,6 +1032,18 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     | `true` | **no write** (opt-in is not a grant) | writes |
     | `false` | no write | **no write** (the link denies) |
     | omitted / `null` (inherit) | no write | writes |
+
+  - **What "no write" does, per source type.** On fixed-contract providers (Jira, Gmail,
+    Notion, Microsoft, HubSpot…) the write tools are not exposed to the agent and the
+    execution is blocked. On `mcp_server` sources the same now holds, with one caveat
+    worth knowing before you design a read-only collector: MCP tools have no contract, so
+    the read/write split uses the server's `annotations.readOnlyHint` when declared and,
+    without it, the verb in the name (`create`/`update`/`move`/`comment`/`delete`…). Tools
+    classified as writes are **omitted from the agent's prompt and refused at execution**.
+    Check the split tool by tool in the `write` field of `list_mcp_tools`, and have the
+    server declare `readOnlyHint` when the name misleads. Until 08/2026 this toggle did
+    **nothing** on MCP sources: a collector connected with `allow_write: false` still
+    listed — and could call — the server's write tools.
 
   - The response echoes what was **stored** (`allowWrite`) and, whenever the source could
     be read, the already-computed `effectiveAllowWrite` — that difference is what keeps
