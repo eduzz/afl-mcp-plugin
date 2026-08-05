@@ -418,7 +418,8 @@ lacks it — surface verbatim):
   - **`jira_criar_issue`: `epic` and `parent_key` both take an issue key.** The
     epic is applied as the issue's parent, and `parentApplied` in the result tells
     you whether it took — no second read needed.
-  - **Web pages: `criar_pagina_web` → `listar_paginas_web` → `editar_pagina_web`.**
+  - **Web pages: `criar_pagina_web` → `listar_paginas_web` → `consultar_pagina_web`
+    → `editar_pagina_web` → `consultar_pagina_web` again.**
     Creating returns the page's `url`; editing takes that same `url` and publishes
     a NEW version. When the user refers to a page that already exists without
     giving you the link ("edit that report page"), call `mcp__afl__listar_paginas_web`
@@ -426,6 +427,24 @@ lacks it — surface verbatim):
     this user, newest first, each with the `url` ready to pass to the editor.
     **Do not recreate a page to change it:** recreating loses everything the
     original brief didn't repeat.
+  - **`mcp__afl__consultar_pagina_web`** `{ agentId, pagina, formato?, busca?,
+    limite_chars? }` (`tools:read`) **reads the page's content** — the piece that was
+    missing from that chain. Use it **twice**:
+    - **After `editar_pagina_web`, before saying the change was made.** The editor's
+      `instrucoes` mode finishes in the BACKGROUND and can fail after having answered
+      "dispatched", so "I edited it" is an unverified claim until you look. If the
+      section you asked for is not there, it was **not** applied — say so and redo it.
+      Same rule as `ler_app_web` for AFL Apps.
+    - **Before `editar_pagina_web` with `substituicoes`**, because `de` must match the
+      page's text LITERALLY. Reading gives you the exact string instead of a guess —
+      guessing is the usual cause of "no substitution matched".
+    Three formats, cheapest first: `estrutura` (title + section index — enough for "did
+    section X land?"), `texto` (default, visible text without tags) and `html` (raw, to
+    copy an exact snippet). `busca` returns only the passages citing a term, accent- and
+    case-insensitive, with the surrounding context — and the snippets come back with the
+    ORIGINAL accents and casing, which is exactly what a `de` needs. A page is tens of
+    KB, so content is capped and any cut is announced (`truncado: true`): **cut content
+    is not missing content** — refine with `busca` before concluding a section is absent.
 - **Feed the knowledge base** → `mcp__afl__gerenciar_documentos` (`tools:write`)
   `{ agentId, op: "adicionar", titulo, conteudo? | file_key? | file_url?, nome_arquivo?,
   is_critical? }`. `conteudo` is already-extracted text; **`file_key`** takes a file
