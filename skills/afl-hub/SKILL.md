@@ -576,7 +576,7 @@ lacks it — surface verbatim):
   `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`).
   A step's `type` is one of **five**, and each one needs a **different `config`** —
   an incomplete `config` fails the whole DAG, so get it right up front:
-  `agent` → `{ agentId, instructions? }` · `automation` → `{ automationId }` ·
+  `agent` → `{ agentId, instructions?, readOnly? }` · `automation` → `{ automationId }` ·
   **`approval`** (human gate, pauses the run) → `{ approverUserIds: [...] }` **or**
   `{ approverGroupRole: "admin" | "member" }` — **one of them is mandatory**
   (optional: `message`, `expiresInHours`, default 168) ·
@@ -591,6 +591,46 @@ lacks it — surface verbatim):
   `HTTP 400: "Definição do squad inválida"`, which reads like "approval isn't
   supported". It is; it just needs an approver. The hub now rejects an incomplete
   `config` at the boundary, naming the step and the missing field.
+  **`readOnly: true` on an agent step is a real gate, not a prompt line.** Until
+  2026-08-07 an agent step's `config` took exactly two fields — `agentId` and
+  `instructions` — so "this step must not write" could only be *prose*. Prose
+  loses: in one production run the step had `Somente leitura.` as the last line of
+  its own instructions, got *"do not write anything in Jira in any step"* in the
+  trigger message, and **called `jira_comentar` anyway**. What stopped the write
+  was an unrelated bug. With `readOnly`, the tool is removed from the list offered
+  to the model **and** refused at the execution funnel — including the write
+  *operations* of source tools (`datasource_jira op='write'`, `datasource_mcp`
+  calling a write tool of the server) and the delegating ones
+  (`executar_em_background`, `executar_squad`, `mencionar_agente`), which would run
+  in a turn where the policy is not re-evaluated. The read allowlist is the
+  platform's and **denies what it cannot classify**.
+  **There is no per-step tool selection, deliberately.** An `allowedTools` list
+  existed briefly and was removed: choosing *which* tools an agent uses is the
+  **agent's** configuration, and a per-step list would be a second source of truth
+  about the repertoire, drifting silently from the agent every time a tool is
+  added. What a step declares is **privilege**, which is the one dimension the
+  agent cannot express — `allow_write` on the agent↔source link is per **agent**,
+  so "step 2 reads, step 3 writes, same carrier" only becomes sayable here.
+  `get_squad` echoes the recognised policy as **`toolPolicy`, outside `config`**:
+  present = the step denies what falls outside it; **absent = the step has the
+  carrier agent's full privilege**, no matter what `instructions` claims.
+
+  **`modelResolution` answers "why did this step run on that model?" — before it
+  runs.** A run where all three steps landed on a small model, while a direct
+  `chat_with_agent` to the *same* agent minutes earlier used a bigger one, looked
+  like squads pinning a model. They do not: both paths ask the matrix for the same
+  `functionality`. The swap happens **after** the matrix, in the LLM preflight,
+  which re-resolves with the turn's **real** token requirement — and a step ships
+  the squad context, the trigger, the **entire output of every parent step** and
+  every tool schema, while a chat message ships a question. *The path does not
+  change the model; the path changes the size of the turn, and the size decides.*
+  So `get_squad` now returns, per agent step, the `functionality`, the matrix's
+  `matrixModel`/`matrixFallbackModel`, a `precedence[]` and
+  `mayAutoSwitchOnContext`. **There is no `config.model`, and there will not be**:
+  pinning a model on a step is the same LLM-matrix bypass that got `llm_model`
+  removed from agents. If a step is landing on too small a model, the lever is the
+  size of the dossier it inherits (`includeParentOutputs`), not a pin.
+
   **A rejection can send the work back instead of killing the run.** Two pieces,
   and neither works alone: an edge's **`onOutcome`** (`"approved"` | `"rejected"`;
   omit it for the normal unconditional edge) says **where** a rejection goes back
@@ -1231,6 +1271,21 @@ which tells you *that* something changed, never *what*. Cross `acoesChamadas` wi
 declared-but-never-called is a capability granted for nothing. If it returns
 `parcial: true`, the page builds fields in JavaScript and the list may be incomplete —
 read with `incluir_pagina: "html"` before concluding a field does not exist.
+
+**Visibility is not settable by tool — and now it says so.** `criar_app_web`
+takes `publico_alvo` and `editar_app_web` takes it too, but neither *publishes*:
+the parameter only hardens validation against the intended audience. The
+effective audience is the **column**, written solely by the owner publishing on
+the manage screen — a human act with no tool and no MCP equivalent. This used to
+be silent, and the silence was the bug: one call asked for two things, got an
+excellent warning about a clamped `maxLength` and **nothing at all** about
+`visibility: owner → org`, while `updatedAt` advanced and the manifest stayed
+`owner`. Half the truth reads worse than none. Any audience request — through
+`publico_alvo` or the aliases people actually try (`visibility`,
+`manifest.visibility`, `visibilidade`, `audiencia`) — now comes back as a warning
+in `data.warnings` and in the message: what you asked, what stayed in effect, and
+that the path is the owner publishing. **Recognising an alias does not honour
+it** — nothing persisted changed.
 
 **`pendingPageEdit` means a rewrite is in flight — do not re-dispatch.** `editar_app_web`
 answers `ok` in a few hundred milliseconds and the new page lands minutes later. In
