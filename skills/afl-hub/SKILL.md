@@ -71,10 +71,13 @@ belonged. Some tools also keep legacy aliases (`imageUrl`, `file_url`); they are
 for compatibility, `url` is the contract.
 
 **3. Some tools answer before the work is done.**
-`execute_in_background` obviously, but also `criar_app_web` — which, note, is **not a
-hub tool**: you reach it by asking an agent through `chat_with_agent` (see "Generators
-you drive through the agent, not directly" below). It returns while the app is still
-being built (observed: 4m17s between the reply and the app existing).
+`execute_in_background` obviously, but also `criar_app_web` and `editar_app_web`, which
+**are hub tools now** (`tools:write`, since 2026-08-07). They validate the contract
+synchronously — a refusal comes back whole, with the full list of problems — and then
+dispatch the page write, which takes minutes, returning
+`{ "dispatched": true, "task_id": "..." }`. **A `task_id` means nothing has been
+produced yet**: fetch the outcome with `get_task_result`, and watch the app with
+`get_app_web`. (Observed before this: 4m17s between the reply and the app existing.)
 The row, though, is **reserved at dispatch**: the app shows up in
 **`mcp__afl__listar_apps`** (`agents:read`) from the first instant, as
 `status: "gerando"`. So a missing reply is answerable instead of a guess — confirm
@@ -695,13 +698,25 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   a **personal** agent (only `name` ≥3 chars required); with `organization_id` it creates an
   **org** agent (requires `name` + `prompt`, and the user must be **admin/owner** of the
   org). Other optionals: `description`, `prompt` (system instructions), `level` (personal
-  only), `llm_model`, `temperature` (0–2), `category`/`target_audience` (personal only),
+  only), `temperature` (0–2), `category`/`target_audience` (personal only),
   `avatar_icon`, `avatar_color`, and `group_ids` (org only — see below).
+  **The model is not one of them** — see the note below.
   **`mcp__afl__update_agent`** `{ agent_id, ... }`
   (`agents:write`) patches fields (omitted = preserved; on an org agent `category`/`is_active`
-  are ignored and `group_ids` **redefines** the groups). It also takes
-  **`max_tokens`** (100–8000) — the agent's response token cap, writable on both the personal
-  and the org path; out-of-range is refused rather than silently clamped.
+  are ignored and `group_ids` **redefines** the groups).
+
+  > **`max_tokens` and `llm_model` no longer exist on this surface** (removed 2026-08-07),
+  > and for the same underlying reason: both looked like controls and decided nothing.
+  > `max_tokens` presented itself as *"the agent's response token cap"*, range-checked
+  > 100–8000 — and was **never read by the execution loop**, which always took the
+  > per-call ceiling from the *model*. An agent configured at 2000 produced 5,712 output
+  > tokens in one turn, so anyone sizing cost by it was sizing fiction. (Related reading
+  > trap that still applies: the `out` in the verifiable turn block is the **sum of the
+  > turn**, which makes several calls when tools run — a per-call cap could never account
+  > for it.) `llm_model` went because **model choice belongs to the LLM matrix**, resolved
+  > per functionality/plan/subtype and administered by admins; a model pinned on the agent
+  > bypasses that matrix, and the visible symptom was the same agent running on different
+  > models depending on the invocation path, with nobody able to say why.
   **To change PART of the agent's `prompt`, use `prompt_edits` / `prompt_append` /
   `prompt_prepend`** — same anchored-edit contract as `update_skill` (literal match,
   must be unique, aborts the whole call on a miss, cannot be combined with the full
@@ -1167,12 +1182,12 @@ Sampling is not supported.
   handbook §2. When a user asks you to "create an AFL API key", point them there — do
   not go hunting for a tool.
 
-## Reading an app's contract — `get_app_web`
+## Reading an app — contract *and* page — `get_app_web`
 
-**`mcp__afl__get_app_web`** `{ app_id }` (`agents:read`) returns one app of yours
-**with the full, effective manifest** — the same object the runtime reads to decide
-whether a page action may execute. `listar_apps` deliberately does not carry it (it is
-a listing); this is where it lives.
+**`mcp__afl__get_app_web`** `{ app_id, incluir_pagina? }` (`agents:read`) returns one
+app of yours **with the full, effective manifest** — the same object the runtime reads
+to decide whether a page action may execute. `listar_apps` deliberately does not carry
+it (it is a listing); this is where it lives.
 
 Two reasons to reach for it:
 
@@ -1192,6 +1207,46 @@ Alongside the manifest it returns the state that explains behaviour: `status`,
 `allowedDomains`, plus `usage`. When the manifest's own `visibility` differs from the
 effective one — `editar_app_web` edits the manifest without publishing — the response
 says so in `visibilityDivergence`.
+
+**`generationSpec` is the frozen brief, not the page — never answer form questions from
+it.** It is the `descricao` you passed to `criar_app_web`, written once and **rewritten
+by no edit**. It describes the app as it was *asked for*. It used to be called
+`description`, and the name made it the most specific, most actionable text in the whole
+response: in production it announced *"a form with 6 required fields"*, field by field
+with type and limit, over a page that had **five** — two had been merged into a single
+500-character one, and what the brief called "a six-option selector" was free text.
+Fifteen submissions were drafted against the brief; **eleven blew the real limit** and
+had to be rewritten. A human opening the URL is what caught it.
+
+**`incluir_pagina` is the portrait.** It projects the HTML that is serving *right now* —
+nothing is cached, nothing is synchronised, so nothing can drift. Four formats: `campos`
+(the default and the point of it: `rotulo`, `tipo`, `obrigatorio`, `limiteCaracteres`,
+`opcoes` per control, plus `acoesChamadas`), `estrutura` (section index only), `texto`,
+and `html` (the raw document, expensive). Use it **after every page edit** and **before
+sending anyone to fill the form**. It is also the only way, through the hub, to see
+*what* an edit changed: `consultar_pagina_web` rejects an app URL (it resolves S3 keys
+from `criar_pagina_web`) and `listar_paginas_web` cannot see apps — leaving `updatedAt`,
+which tells you *that* something changed, never *what*. Cross `acoesChamadas` with
+`declaredActions`: called-but-undeclared is a `not_allowed` in the user's face;
+declared-but-never-called is a capability granted for nothing. If it returns
+`parcial: true`, the page builds fields in JavaScript and the list may be incomplete —
+read with `incluir_pagina: "html"` before concluding a field does not exist.
+
+**`pendingPageEdit` means a rewrite is in flight — do not re-dispatch.** `editar_app_web`
+answers `ok` in a few hundred milliseconds and the new page lands minutes later. In
+between, `currentVersion`, `updatedAt` and `generationStatus` say exactly what they would
+say if the edit had been lost — and a carrier agent, in production, read the app right
+after the `ok`, saw everything unchanged and announced that *"the previous edit did not
+go through"*, about to redo it on top of one still in flight. When the field is there
+(`since`, `taskId`, `versionAtDispatch`), wait and read again.
+
+**Three numbers called "version", measuring three different things.**
+`currentVersion` is the **page** version; `manifestHash` is the **contract** version;
+`manifestFormatVersion` (= `manifest.version`, always `1` today) is the **manifest
+format** version. The platform's own agent compared `manifest.version: 1` against the
+app's version 2 and concluded the contract had not changed — when the opposite was true:
+on a **page** edit the manifest *must* stay identical, and an unchanged `manifestHash` is
+the desired outcome, not a symptom.
 
 Notes that save a wrong conclusion:
 
@@ -1275,28 +1330,37 @@ single account active.
 
 ## Generators you drive through the agent, not directly
 
-Looking for `criar_app_web`, `editar_app_web`, `criar_pagina_web`, `gerar_imagem`? They
-are **deliberately not hub tools**. Ask an agent for them with `chat_with_agent` — the
-agent has them natively, and the result lands in the AFL product.
+Looking for `gerar_imagem` or `editar_imagem`? They are **deliberately not hub tools**.
+Ask an agent for them with `chat_with_agent` — the agent has them natively, and the
+result lands in the AFL product.
 
 The criterion is not "it generates something". It is **whether what comes back is usable
 outside the chat**:
 
 - `criar_documento` and the document editors **are** hub tools — they return a real file
   in storage with a download `url`, and the hub consumes files by URL everywhere.
-- `criar_app_web`, `criar_pagina_web` and the image generators **are not** — they publish
-  a resource of the AFL product (or return markers that only the AFL chat knows how to
-  materialize). Handed to an MCP client, the reply is not something you can use on your
-  own; if you want to generate that kind of content client-side, use your own model.
+- the image generators **are not** — they return markers that only the AFL chat knows how
+  to materialize. Handed to an MCP client, the reply is not something you can use on your
+  own; if you want that kind of content client-side, use your own model.
 
-**Reading them back is a different question, and reading IS exposed** — precisely because
-these generators answer before finishing. `listar_apps` and `get_app_web` are
-first-class hub tools (`agents:read`), and `listar_paginas_web` is reachable as well. That
-asymmetry is the design, not an oversight: without the read you would be stuck between
-"don't call it again" and "I can't tell whether it exists", and the safe-looking move —
-recreating — produces a second app with a second link.
+**AFL Apps used to be on the "not" side, and are not any more** (2026-08-07).
+`criar_app_web` and `editar_app_web` are first-class hub tools now (`tools:write`),
+because the old criterion did not survive contact: `editar_app_web` is a *deterministic*
+operation, and routing it through `chat_with_agent` meant paying for an LLM — plus prose
+to verify — to run it. Worse, two of the hub's own hints told you to use
+`editar_app_web`, a tool the client did not have; a hint pointing at an unavailable tool
+is worse than no hint, because it burns an attempt before failing. They are async here
+(`task_id` → `get_task_result`), and none of the consent gates moved: creation lands as a
+**draft** (publishing stays a human act on the manage screen), and editing the contract of
+a **live** app still requires `despublicar: true`.
 
-So: **drive the generator through the agent, verify with the reader.**
+Reading is exposed for the same reason it always was — these generators answer before
+finishing. `listar_apps` and `get_app_web` (`agents:read`) and `listar_paginas_web` are
+all reachable: without the read you would be stuck between "don't call it again" and "I
+can't tell whether it exists", and the safe-looking move — recreating — produces a second
+app with a second link.
+
+So: **dispatch, then verify with the reader.**
 
 ## Known limitations (current)
 
