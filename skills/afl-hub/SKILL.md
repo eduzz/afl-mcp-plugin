@@ -224,8 +224,8 @@ JSON, no model in the middle); for a JUDGEMENT
     first execution, which may be inside a squad, days later.
     **`write: true`** marks the tools classified as writes — they are refused on a
     read-only source and never reach the agent's prompt (see `allow_write` below).
-    Org-aware: looks in the **organization** first (the token's, or `organization_id`,
-    requiring active membership) and then in the token owner's **personal** scope — that
+    Org-aware: looks in the **organization** first (the token's — see *Token org binding*
+    below — requiring active membership) and then in the token owner's **personal** scope — that
     order because the personal lookup filters by owner only and does NOT exclude org
     sources, so an org source you created comes back through it; calling it "personal"
     would run the read without org context (org credential unresolved, no `organization_id`
@@ -1189,6 +1189,26 @@ Sampling is not supported.
 
 ## Auth, scopes, ownership
 
+- **Token org binding is a BOUNDARY, not a default.** A key issued for an
+  organization (`/api-tokens` → *Organização*) reaches **only that organization**:
+  - `list_organizations` returns that one org — never the other orgs the issuer
+    belongs to;
+  - `list_agents` returns only that org's agents — **personal agents are not
+    listed**, and are refused if you pass their `agentId` anyway (hiding is not
+    denying, so both are enforced);
+  - passing `organization_id` of a different org is **refused** (`blocked`), even
+    when the person who issued the key is a member of it — the limit is the
+    KEY's, not the person's.
+
+  Need two organizations? Issue two keys. That is also what lets you revoke one
+  without taking the other down. A key with **no** org (personal) is unchanged:
+  `organization_id` still selects the org, and active membership still decides.
+
+  Before 2026-08, the binding only supplied a default and an explicit
+  `organization_id` overrode it — so an org-scoped key carried its issuer's full
+  cross-org authority. If a call that used to work now returns "esta chave está
+  vinculada à organização …", that is this change, and the fix is a key for the
+  right org.
 - Auth is OAuth (browser login on first use; token stored in the OS keychain). The
   AFL is the OIDC Authorization Server (discovery + PKCE + Dynamic Client
   Registration), so `claude mcp add --transport http afl <hub-url>` **without**
