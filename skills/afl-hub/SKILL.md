@@ -206,7 +206,20 @@ JSON, no model in the middle); for a JUDGEMENT
     configured in the agent's source, so a `list`/`search` won't walk the whole drive.
   - `mcp__afl__notion_query` `{ agentId, databaseId?, query? }` — pass `databaseId`
     (the Notion database id) to query a specific DB; otherwise `query` does a
-    workspace search.
+    workspace search. `notion_database_schema` `{ agentId, database_id | database_name }`
+    gives you the **column names and types** — call it before a
+    `notion_database_*_entry` write instead of guessing property names (they are
+    LITERAL for Notion: accents and case are part of the name).
+  - `mcp__afl__whatsapp_messages_analyze` `{ agentId, analysis_type?, phone?, days?,
+    max_results?, include_content?, datasource_name? }` — WhatsApp history, **no model
+    in the middle** (SQL over the messages the Evolution webhook persists in real
+    time). `analysis_type` is `contact_history` (needs `phone`) | `summary` |
+    `top_contacts` | `recent_messages` | `daily_stats`; `days` defaults to 7 — raise it
+    to reach older conversations. Covers contacts AND groups. **There is no sync
+    step**: an empty result means there are no messages for that window/conversation in
+    AFL (anything predating the number's connection does not exist in the database) —
+    never that a sync is missing. See the WhatsApp block under writes for the source
+    gate, which applies here too.
   - `mcp__afl__query_database` `{ agentId, dataSourceId?, query }` — natural-language
     or SELECT-style question over a connected DB. `dataSourceId` is optional and
     auto-resolved when the agent has a single database source.
@@ -421,6 +434,61 @@ lacks it — surface verbatim):
   - **`jira_criar_issue`: `epic` and `parent_key` both take an issue key.** The
     epic is applied as the issue's parent, and `parentApplied` in the result tells
     you whether it took — no second read needed.
+  - **WhatsApp: `send_whatsapp_message`, `whatsapp_audio_send`, `whatsapp_call_reject`**
+    (`tools:write`), plus the read `whatsapp_messages_analyze` (`tools:read`).
+    `send_whatsapp_message` `{ agentId, phone, message, contact_name?,
+    datasource_name? }` — **always prefer `phone`** (country code included,
+    `5511999999999`): sending by number does not depend on the address book.
+    `whatsapp_audio_send` turns `audio_text` (≤2000 chars) into a voice note by TTS.
+    `whatsapp_call_reject` `{ agentId, enabled, message?, reject_video_only? }`
+    CONFIGURES automatic call rejection for the whole number — it does not hang up a
+    call in progress.
+
+    **Three paths reach WhatsApp; pick deliberately.** The direct tool is a
+    **deterministic FACT** (you supply the number and the text, no model decides
+    anything). `chat_with_agent` is **JUDGEMENT** — the agent decides *what* to say.
+    A squad's `send_whatsapp` action is **ORCHESTRATION** — the squad decides *when*.
+    All three land on the same executor and the same gate, so the tool is not a way
+    around a permission; it is a way around paying an LLM for a deterministic act.
+
+    **The NUMBER is a data source, and it decides everything.** A connected number is
+    a `whatsapp_data` source that must be **linked to the agent** — same gate as
+    Jira/HubSpot. What follows from that:
+    - **No carrier agent, no WhatsApp.** `execute_tool` (agent-less, org scope)
+      REFUSES all four: without an agent there is no source, and without a source
+      there is no outbound number. This is deliberate — it is what stops an org agent
+      from sending through the personal number of whoever paired it.
+    - **Two sources, no automatic pick.** The same number can carry several sources
+      with different **scopes** ("Support" = 3 groups, "Sales" = another list). With
+      more than one linked, the tool REFUSES (`WHATSAPP_SOURCE_AMBIGUOUS`) and names
+      the candidates *with each one's scope* — that scope is how you choose. Pass
+      `datasource_name` (exact name, substring, or the source id). It never picks one
+      for you: sending through the wrong number is irreversible.
+    - **Empty scope means the WHOLE number**, not "no conversations".
+
+    **Writes need source ∧ link**: the source's `allow_agent_write` AND the
+    agent-link's `allow_write`, re-checked on every call. Every refusal names the
+    source and the fix, and none of them comes back as success — surface them
+    verbatim and **never claim the message went out**:
+    `WHATSAPP_SOURCE_NOT_CONNECTED` (link the source to this agent — the integration
+    may well exist; the LINK is what is missing) · `WHATSAPP_SOURCE_AMBIGUOUS` (pass
+    `datasource_name`) · `WHATSAPP_SOURCE_READ_ONLY` (the owner enables "allow write"
+    on the source **and** on its link to this agent) · `WHATSAPP_TARGET_OUT_OF_SCOPE`
+    (the recipient is outside this source's conversation list — **not** a connection
+    or permission failure; use a source that covers them) ·
+    `WHATSAPP_SETTING_OUT_OF_SCOPE` (`whatsapp_call_reject` from a restricted-scope
+    source: the effect is number-wide, so only a source reaching the whole number may
+    set it — true even with write enabled) · `APPROVAL_REQUIRED` (**double opt-in**:
+    auto-approve WhatsApp in the user's profile AND on the agent; nothing was queued,
+    so do not report the message as "pending") · `TIMEOUT` (the channels-service did
+    not answer within 15s/30s — the call fails cleanly instead of hanging; retry).
+
+    **Two WhatsApp tools deliberately do not exist on the hub.**
+    `whatsapp_messages_sync` — there is nothing to sync, history is written in real
+    time; use `whatsapp_messages_analyze`. And `save_contact` — AFL keeps no address
+    book of its own (the contact list is a synced copy of the phone's), so to reach
+    someone new call `send_whatsapp_message` with `phone`. If a user asks for either,
+    say what replaces it; do not report a contact as saved.
   - **Web pages: `criar_pagina_web` → `listar_paginas_web` → `consultar_pagina_web`
     → `editar_pagina_web` → `consultar_pagina_web` again.**
     Creating returns the page's `url`; editing takes that same `url` and publishes
