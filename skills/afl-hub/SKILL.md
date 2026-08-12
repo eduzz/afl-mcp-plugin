@@ -1316,12 +1316,15 @@ go through"*, about to redo it on top of one still in flight. When the field is 
 (`since`, `taskId`, `versionAtDispatch`), wait and read again.
 
 **Three numbers called "version", measuring three different things.**
-`currentVersion` is the **page** version; `manifestHash` is the **contract** version;
+`currentVersion` is the **page** version; `manifestHash` fingerprints the **manifest**;
 `manifestFormatVersion` (= `manifest.version`, always `1` today) is the **manifest
 format** version. The platform's own agent compared `manifest.version: 1` against the
 app's version 2 and concluded the contract had not changed — when the opposite was true:
 on a **page** edit the manifest *must* stay identical, and an unchanged `manifestHash` is
-the desired outcome, not a symptom.
+the desired outcome, not a symptom. One caveat on the hash: it covers the **whole**
+manifest, theme included, so it also moves on a look-only edit. The question it answers is
+"is what I sent what is stored?", not "did the contract change?" — for the latter read the
+effective manifest (`actions`, `data`); for the look, `themeChange`/`themeTokensChanged`.
 
 Notes that save a wrong conclusion:
 
@@ -1339,6 +1342,8 @@ Notes that save a wrong conclusion:
   not called "draft" — `listar_apps` shows `revogado` — but `editar_app_web` keeps
   working on it, for as many correction rounds as you need. Only republishing is a human
   act, on the manage screen; there is no MCP equivalent. Never recreate the app.
+  **The theme is not contract and does not need this** — see "Changing an app's look"
+  below.
 - **Owner-only.** Someone else's app answers `não encontrado` — 404, never 403, and the
   same answer as an id that never existed. Resolve ids with `listar_apps`.
 - **`usage` separates attempt from outcome — read all of it before concluding.**
@@ -1350,6 +1355,65 @@ Notes that save a wrong conclusion:
   *now*?": the window average cannot, since 10 consecutive failures at the end score the
   same as 10 spread out. `listar_apps` carries the two that change how a row reads
   (`failedInvocations`, `lastInvocationStatus`); the full breakdown is here.
+
+## Changing an app's look — `tema`
+
+`criar_app_web` and `editar_app_web` both take **`tema`** `{ modo, cor_primaria?, fonte? }`.
+It is already in the `inputSchema` your client sees — the hub derives that schema from its
+own tool map — so what was missing here was never access to the parameter, it was the
+guidance below. Guided personalisation only: two tokens, never free CSS.
+
+**`modo` is mandatory inside `tema`, and it decides everything else.**
+`personalizado` applies `cor_primaria`/`fonte` and requires at least one of them (neither
+= the call is **refused**). `padrao` means the AFL design system and **ignores** both —
+`modo: "padrao"` with a colour attached is a contradiction, resolved in favour of the
+explicit mode: the token is dropped and a `tema_tokens_ignorados` warning names it. **Do
+not report a dropped colour as applied.** Omitting `modo` while sending a token makes the
+backend infer `personalizado` and warn `tema_modo_inferido` — a safety net for a
+malformed call, not the contract. Declare `modo`.
+
+**On an edit, `personalizado` MERGES token by token.** What you send lands on top of what
+was in effect; what you do not send is **preserved** — sending only `fonte` does not wipe
+the `cor_primaria` the app already had. `padrao` is the opposite, and the only way to
+clear: it replaces, removing the custom tokens. Theme is the one section of the manifest
+that merges; `capacidades` and `dados` replace, deliberately.
+
+**Read `themeChange`, not your own intent.** The response carries `themeChange` — `none`
+(no `tema` sent), `unchanged` (what you sent is exactly what was already in effect),
+`reset` (back to the design system), `merged` (new tokens over existing ones), `set`
+(custom where there was none) — plus `themeTokensChanged[]` naming the tokens that
+actually moved. Report from those two. "Theme: replaced" used to be printed whenever
+`tema` appeared in the call, and it was false in three of the four cases.
+
+**A theme-only edit applies straight to a LIVE app.** Colour and font authorize nothing,
+so they are not contract and do not meet the unpublish gate: `editar_app_web
+{ app_id, tema }` writes on the spot, does not unpublish, does not take the link down —
+**never pass `despublicar: true` to change a colour**. What stays locked while the app is
+live is a **contract** change (`capacidades`/`dados`), including when it arrives in the
+**same call** as the theme: then the whole call is refused and **nothing is written, not
+even the theme**. Resend the theme alone if only the look matters now. A theme-only edit
+is also synchronous — no `task_id`, no page rewrite, no bump to `currentVersion`.
+
+**`fonte` is a family name, not CSS — this is the one that fails.** One family
+(`Georgia`) or a comma-separated stack (`Helvetica Neue, Arial, sans-serif`): letters,
+digits, space, `-` and `_`, each segment starting with a letter, 80 chars max. **No
+quotes** — the reflex spelling `"DM Sans", sans-serif` is **rejected**; `DM Sans,
+sans-serif` passes (a name with a space needs no quotes in CSS). No parentheses either,
+so no `var(--x)` and no `Roboto (Google Fonts)`; no `;`, no `{}`, no accents. Anything
+outside that comes back as a `schema` issue on `theme.tokens.fontFamily`. The family must
+also be web-safe or already on the machine: the app runs in a sandboxed iframe with no
+access to an external font CDN. `cor_primaria` is a 6-digit hex (`#0EA5E9`).
+
+**The reach is narrow, and this is the false report waiting to happen.** The theme moves
+the design-system CSS variables — `--afl-color-primary` (plus the CTA background/label
+pair derived from it, so the brand colour lands on the button's *fill*, with the label
+picked for contrast) and `--afl-font-family` — which only the ready-made components
+(`afl.el.table/list/form/state`) and whatever the page reads through `var(--afl-*)`
+consume. A colour the generated HTML **hardcoded** does not move. So a call can come back
+`themeChange: "merged"`, perfectly correct, and the user opens the link and sees no
+difference. State what changed in terms of the tokens; when the visible part is
+hardcoded, the fix is `instrucao` — rewriting the page of a published app is allowed and
+takes nothing off the air.
 
 ## Publishing an app publicly — what the gate rejects
 
