@@ -1240,6 +1240,49 @@ Sampling is not supported.
 `afl://skills/agent/{id}` to see a given agent's enabled skills; then use the
 `use_skill` prompt to invoke one via `chat_with_agent`.
 
+## Bulk/tabular extractions — never let the agent enumerate
+
+When the user wants a **listing, a count, or a spreadsheet** built from a connected
+source ("planilha com remetente/data/assunto de todos os e-mails de maio", "quantos
+cards na sprint ativa", "exporta X"), do NOT let the agent walk the items. Inline
+enumeration passes every row through the model's context, which **truncates and
+fabricates** — and the reply sounds just as confident when it does.
+
+Tell it, in the `chat_with_agent` message, to use the deterministic tabular engine:
+
+> Use a ferramenta `analisar_planilha` sobre a fonte <nome da fonte> com
+> `source_filter: "<query nativa>"` e `formato_saida: "documento"`. NÃO liste os
+> itens um a um.
+
+`source_filter` is the source's **native** query, applied server-side before the
+analysis. It is not optional flavor — it is what makes a scoped question honest:
+
+- **Gmail** — native Gmail query: `after:2026/05/01 before:2026/07/01`,
+  `from:x@y.com`, `label:INBOX`. Without it the whole mailbox is materialized, up to
+  a 5000-message ceiling (most recent first), so a long period silently truncates.
+- **Jira** — JQL, and **mandatory for anything dynamic**. The engine receives a table
+  and cannot resolve "sprint ativa" (that is resolved by Jira, not by the dump).
+  Asking "quantos cards na sprint ativa?" *without* `source_filter` counts the
+  ENTIRE board. Use `sprint in openSprints()`, `assignee = currentUser()`, and so on.
+  The source's configured project filter is applied automatically on top.
+
+`formato_saida: "documento"` produces an `.xlsx` with the complete result — use it
+whenever the answer must carry every record, not a sample.
+
+**Honesty rule that comes with this:** only state that a result is "da sprint ativa"
+(or of any other slice) if you actually passed the corresponding `source_filter`.
+Otherwise say plainly that it covers the whole source.
+
+**Gmail gotcha —** `after:`/`before:` filter by **internalDate**. Imported or
+migrated mailboxes stamp the *import* date on old mail, so date distributions can
+spike on the migration day. Flag that to the user instead of reading it as corrupted
+data.
+
+**Always validate the artifact** before handing it over — row count, distribution per
+period, no placeholder domains like `exemplo.com`. If the agent compiled inline
+instead of using the engine, the file can be truncated or invented even when the
+prose around it is confident.
+
 ## Getting the most out of it
 
 - **Ground, then synthesize:** `list_agents` → `search_knowledge_base` (or a provider
