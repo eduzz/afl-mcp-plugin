@@ -1528,6 +1528,27 @@ Notes that save a wrong conclusion:
   same as 10 spread out. `listar_apps` carries the two that change how a row reads
   (`failedInvocations`, `lastInvocationStatus`); the full breakdown is here.
 
+## Linking one app to another — `navegacao`
+
+`criar_app_web` and `editar_app_web` take **`navegacao`**: a list of
+`{ nome, app, descricao? }`, where **`app` is the NAME of another app of the same owner**.
+There is no URL parameter, and there will not be one — the manifest is `strict()` and the
+resolver freezes the name into an id at authoring time, exactly like `fixos` freezes a tool
+action's target. The page then calls `afl.nav.open('<nome>')`; the id never reaches the
+page, and a page that tries to pass a URL where a declared name belongs is refused.
+
+**Do not ask for a link by writing an anchor.** A generated page runs inside a sandboxed
+iframe, and an `<a target="_blank">` there is blocked **silently** by the browser — no tab,
+no navigation, no error. That was a real 🔴: an entry-point app whose three buttons did
+nothing, with no symptom to report. Declaring the destination is the only path that works;
+for an address outside AFL, render copyable text, never an anchor.
+
+Destinations are checked **twice**: at publish (a destination that does not exist, is not
+published, or is narrower in audience than the app being published refuses the publish) and
+**per viewer** at click time, with the same rule the destination's own bundle applies — so
+opening another app never bypasses that app's authorisation. Every refusal is visible in
+the shell chrome; nothing about this path is allowed to be silent again.
+
 ## Changing an app's look — `tema`
 
 `criar_app_web` and `editar_app_web` both take **`tema`** `{ modo, cor_primaria?, fonte? }`.
