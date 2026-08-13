@@ -320,9 +320,9 @@ record titled `── AFL · registro verificável do turno ──`:
 
 ```
 ── AFL · registro verificável do turno (gerado pela plataforma, não pelo agente) ──
-tools: 3 (ok: 2, blocked: 1)
+tools: 3 (ok: 2, blocked: 1) · 1 com retorno CORTADO (não chegou inteiro ao modelo)
   1. buscar_base_de_conhecimento (ok, 412ms)
-  2. jira_search (ok, 1.2s)
+  2. jira_search (ok, 1.2s, CORTADO: 65422→35246 chars entregues ao modelo)
   3. google_gmail_send (blocked, 12ms): sem permissão de escrita nesta fonte
 llm: claude-sonnet-5 · in 12345 · out 678 · US$ 0.0421
 ```
@@ -349,7 +349,9 @@ _meta: {
     { tool: "google_calendar_read", iteration: 1, status: "ok", durationMs: 812,
       params: { /* truncated preview, secrets masked */ } },
     { tool: "jira_criar_issue", iteration: 2, status: "error", durationMs: 240,
-      error: "nenhuma fonte Jira gravável conectada a este agente" }
+      error: "nenhuma fonte Jira gravável conectada a este agente" },
+    { tool: "datasource_databricks_genie", iteration: 3, status: "ok", durationMs: 38410,
+      truncated: true, originalChars: 65422, deliveredChars: 35246 }
   ]
 }
 ```
@@ -363,6 +365,21 @@ _meta: {
 - **Always reconcile the narrative against `toolCalls`** (rule 9). A tool missing
   from the list did not run, whatever the text says. `params` is a redacted preview —
   enough to identify *which* call was made, not to replay it.
+- **`truncated: true`** means the tool succeeded and part of its answer **never
+  reached the model** — `originalChars` → `deliveredChars` say how much. `status: ok`
+  and a long duration look identical whether the whole answer arrived or half of it
+  did, so this is the field that keeps you from crediting the agent with a *choice*
+  that was really a *limit*: a step that returned schema instead of baseline did not
+  prefer schema, it spent the cut on schema. `truncation[]` appears only when a
+  result was cut more than once (`stage: 'tool' | 'turn' | 'provider'`, innermost
+  first), so an outer cut never erases the inner one.
+  **Absence of the marker means "not cut"** — with three named exceptions where the
+  cut is real but not measurable in characters: cuts counted in *rows or items*
+  (a Genie table, a capped listing) which say so in their own prose; document
+  extraction in consumers that do not yet report the original size; and a cut made
+  by a **remote MCP server** before it answered us, which is not ours to measure.
+  In that last case you still see the platform's own turn-level cut, not the
+  remote one.
 - **`costUsd` may be `null`** — that means **not priceable** (a model with no price
   table, or a turn with no counted tokens), never "it was free". Use `llm` for spend
   caps instead of counting calls: a fixed estimate per call is a volume limiter
@@ -605,7 +622,11 @@ lacks it — surface verbatim):
   a plan or a promise ("awaiting the knowledge-base lookup") — without consulting
   anything, and by every other field it looks exactly like a real dossier
   (`completed`, `hasContent: true`). Same rule as `_meta.toolCalls` in
-  `chat_with_agent`: cross the prose with the record. `baseContextTokens` shows the
+  `chat_with_agent`: cross the prose with the record. A step's `toolCalls` carry
+  **`truncated`/`originalChars`/`deliveredChars`** with the same meaning as above —
+  read them before concluding anything about *why* a step returned what it returned,
+  because a cut result and a complete one are indistinguishable by `status` and
+  duration alone. `baseContextTokens` shows the
   step's context floor — the input tokens it pays before any tool runs, which is
   what tells you whether a step is over-equipped with skills. A step touched by a
   review loop carries **`loopIteration`** — the number of loops that gate has
