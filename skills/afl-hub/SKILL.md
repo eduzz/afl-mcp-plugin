@@ -297,8 +297,9 @@ JSON, no model in the middle); for a JUDGEMENT
     `group_ids` in `create_agent`/`update_agent` **and** in `create_squad`/`update_squad`.
   - `mcp__afl__get_organization_topology` (scope `agents:read`) — the org **graph**: who
     exists, in which group, and what is wired to what. This is the one that answers "which
-    other agents live in this org" and "where does this resource actually live" — see
-    "Reading the org's shape" below.
+    other agents live in this org" and "where does this resource actually live" — and, in
+    its `costCenters` block, the one that resolves the `cost_center <uuid>` a budget refusal
+    names. See "Reading the org's shape" below.
   - `mcp__afl__list_skills { visibility: "platform", search }` — whether a native
     capability for X exists at all.
 
@@ -885,6 +886,27 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
     `not_implemented_v1`, and cross-service reads that failed appear as `read_failed`.
     As everywhere in this hub, **a missing node means this listing did not bring it — never
     that it does not exist.**
+  - **`costCenters` — this is where a budget refusal becomes actionable.** When an LLM call
+    is refused with `LLM access blocked for cost_center <uuid>` (or `LLM quota exceeded for
+    cost_center <uuid>`), that uuid is **neither the organization nor the user** — it is a
+    cost center, and this block is what resolves it. Each entry in `costCenters.visible[]`
+    carries `id`, `name`, `limits` (`monthlyCostLimitUsd`, `monthlyTokenLimit`,
+    `dailyRequestLimit`), `usage` (`currentMonthCostUsd`, `currentMonthTokens`,
+    `currentDayRequests`), `usagePercentOfCostLimit`, `appliesToYou`, `assignedTo` (groups
+    and users) and, decisively, **`blocking`** plus **`exhausted[]`** — which dimension ran
+    out (`monthly_cost` | `monthly_tokens` | `daily_requests`). Raising a *different* ceiling
+    (the account's, the plan's) does not unblock this one; say which dimension to raise.
+    - **The cut is declared, like the graph's.** `costCenters.scope` is `"all"` for org
+      **admin/owner** (every cost center of the organization) and `"yours"` for a plain
+      member, who only sees the centers that **apply to them** — a member does not enumerate
+      other people's budgets. `administrators[]` ships in both cases: that is who to ask.
+    - **The hub does not administer budget** (security decision — that stays outside the
+      agent channel). `costCenters.manageAt` is the AFL interface path where a ceiling is
+      changed; there is no tool for it and there will not be one.
+    - `enforced: false` means "no limits row" — the center **blocks nothing**, it is not a
+      zero ceiling. A configured ceiling that diverges from the enforced one shows up in
+      `warnings`. If the budget read itself fails, `costCenters.unavailable` says so and the
+      graph still comes back whole — never "it does not exist".
 - **Put an org agent in a group — and create the group if it isn't there.**
   `mcp__afl__list_organization_groups` `{ organization_id? }` (scope `agents:read`) lists
   the org's groups (`{ id, name, description, groupType, hierarchyLevel }`); omit the id to
@@ -1418,11 +1440,29 @@ and `html` (the raw document, expensive). Use it **after every page edit** and *
 sending anyone to fill the form**. It is also the only way, through the hub, to see
 *what* an edit changed: `consultar_pagina_web` rejects an app URL (it resolves S3 keys
 from `criar_pagina_web`) and `listar_paginas_web` cannot see apps — leaving `updatedAt`,
-which tells you *that* something changed, never *what*. Cross `acoesChamadas` with
-`declaredActions`: called-but-undeclared is a `not_allowed` in the user's face;
-declared-but-never-called is a capability granted for nothing. If it returns
-`parcial: true`, the page builds fields in JavaScript and the list may be incomplete —
-read with `incluir_pagina: "html"` before concluding a field does not exist.
+which tells you *that* something changed, never *what*.
+
+**Read `pagina.cobertura` before you read anything else — the two directions are not
+equally safe.** The projection is static analysis over HTML, so **presence is a fact and
+absence is not proof**, and it now says so **per dimension** (`campos`, `rotulos`,
+`acoesChamadas`, `secoes`), each with `estado` + `motivo`:
+
+- `completa` — proven sufficient (nothing in the document can change it later). Rare.
+- `indeterminada` — the normal state: what is listed happened; what is missing is unknown.
+- `parcial` — proven wrong (a label still holding `${...}`, a control mounted by script, an
+  action dispatched through a variable). Do not use that dimension.
+
+So, crossing `acoesChamadas` with `declaredActions`: **called-but-undeclared** rests on
+presence and is always safe to report — it is a `not_allowed` in the user's face.
+**Declared-but-never-called** rests on absence, and only means "capability granted for
+nothing" when `cobertura.acoesChamadas.estado === "completa"`. Anywhere else it means the
+projection could not see the call — open the page URL before telling anyone their buttons
+are shells. That mistake was made for real: a page whose button demonstrably worked was
+reported as dead code because the old projection listed 1 of 4 actions and claimed to be
+complete.
+
+`pagina.parcial` survives as a compatibility aggregate and is **true only when some
+dimension is provably wrong** — `false` is *not* a certificate of completeness.
 
 **Visibility is not settable by tool — and now it says so.** `criar_app_web`
 takes `publico_alvo` and `editar_app_web` takes it too, but neither *publishes*:
