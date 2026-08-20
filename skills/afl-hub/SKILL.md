@@ -976,12 +976,31 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
     is refused with `LLM access blocked for cost_center <uuid>` (or `LLM quota exceeded for
     cost_center <uuid>`), that uuid is **neither the organization nor the user** — it is a
     cost center, and this block is what resolves it. Each entry in `costCenters.visible[]`
-    carries `id`, `name`, `limits` (`monthlyCostLimitUsd`, `monthlyTokenLimit`,
-    `dailyRequestLimit`), `usage` (`currentMonthCostUsd`, `currentMonthTokens`,
-    `currentDayRequests`), `usagePercentOfCostLimit`, `appliesToYou`, `assignedTo` (groups
-    and users) and, decisively, **`blocking`** plus **`exhausted[]`** — which dimension ran
-    out (`monthly_cost` | `monthly_tokens` | `daily_requests`). Raising a *different* ceiling
-    (the account's, the plan's) does not unblock this one; say which dimension to raise.
+    carries `id`, `name`, `limits` (**`monthlyCostLimitBrl`**, `monthlyTokenLimit`,
+    `dailyRequestLimit`), `usage` (`currentMonthCostUsd`, **`currentMonthCostBrl`**,
+    `currentMonthTokens`, `currentDayRequests`), `usagePercentOfCostLimit`, `appliesToYou`,
+    `assignedTo` (groups and users) and, decisively, **`blocking`**, **`exhausted[]`** plus
+    **`undecidable[]`** — which dimension ran out (`monthly_cost` | `monthly_tokens` |
+    `daily_requests`). Raising a *different* ceiling (the account's, the plan's) does not
+    unblock this one; say which dimension to raise.
+    - **Two currencies, both declared (migration 0267).** The ceiling is quoted in
+      **BRL** — that is the currency the customer contracts it in, and the `Brl` suffix in
+      the name is the contract. Spend is metered in **USD**, because that is what Bedrock
+      and OpenAI bill in, and converting the measured fact would rewrite it with a rate. So
+      `usage` ships both: the metered figure (`currentMonthCostUsd`) and the same spend in
+      the ceiling's currency (`currentMonthCostBrl`), with the rate that linked them in
+      **`usdBrlRate`**. Always compare `currentMonthCostBrl` against
+      `monthlyCostLimitBrl` — comparing the dollar figure to the real one reads roughly 5×
+      more optimistic than the truth.
+    - **`undecidable[]` is a third state, not a synonym for "all clear".** With no exchange
+      rate, `currentMonthCostBrl` and `usagePercentOfCostLimit` come back `null`,
+      `monthly_cost` lands in `undecidable[]` — and **`blocking` stays `true`**, because
+      that is what the gate does: a declared ceiling that cannot be evaluated DENIES. In
+      that state claim neither headroom nor exhaustion; say the budget could not be
+      evaluated.
+    - `configuredMonthlyCostLimitBrl` is the ceiling an admin typed on the cost center;
+      `limits.monthlyCostLimitBrl` is the one actually in force (the `llm_usage_limits`
+      row). When they diverge the difference shows up in `warnings` — the second one wins.
     - **The cut is declared, like the graph's.** `costCenters.scope` is `"all"` for org
       **admin/owner** (every cost center of the organization) and `"yours"` for a plain
       member, who only sees the centers that **apply to them** — a member does not enumerate
