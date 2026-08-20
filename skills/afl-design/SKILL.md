@@ -95,6 +95,19 @@ consumes it), **3** (the agent "can't write" and nobody knows why), and treating
   for what they *reach*: `Jira LAB — Governança de IA` beats `Jira`.
 - **Write down why the write is allowed.** `write_permission_note` exists for the audit
   you will run later.
+- **A scoped source is not a readable source — prove the read path executes.** A source can
+  be created, bounded to named tables, marked `allowAgentWrite: false`, connected to the
+  agent, listed correctly and drawn as an `acessa` edge in the topology, and still have **no
+  tool that can read a row from it**. That is not hypothetical: it took a live run to find,
+  because every configuration reading said it was fine. Do one real read through the carrier
+  agent and look at the rows before you design anything on top. And read the *result*, not
+  the status — an empty tool name returned with `status: ok`, or an `ok` in 40 ms with no
+  data, is "no path" wearing the grammar of "yes".
+- **`readOnly` on a step denies what it cannot classify — including read-only tools that
+  arrive through a skill.** Marking every non-writing step `readOnly` is right, and it can
+  still switch off the one read path that was left. When a step must use a tool the
+  allowlist does not know, that is a design decision to make deliberately (and to record),
+  not a surprise to meet at runtime.
 
 ## Skills — instruction, not capability
 
@@ -127,9 +140,22 @@ consumes it), **3** (the agent "can't write" and nobody knows why), and treating
 
 - **Skill = rule and method** (short, injected every turn). **Document = the text
   itself** (retrieved on demand). A 30 KB document inside a prompt is paid on every
-  turn, forever.
+  turn, forever. The sharper form of the same test: **what every execution uses whole is a
+  skill; what you consult a piece of at a time is a document.** A fixed query, a ten-point
+  checklist, the section order of a report are method — they belong in a skill, and they
+  arrive with the turn instead of costing a tool call to fetch.
+- **Never write an instruction that searches for method by literal term.** "Search the
+  knowledge base for the query (literal terms: `foo`, `bar`)" asks a vector search to behave
+  like `grep`, and it puts the most fragile call in the pipeline in the first act of the
+  turn. If you know the literal string the agent must use, it is method: put it in the skill.
 - Ingestion is **asynchronous**: it returns `pending` and is only searchable once
   processed. Confirm before telling anyone the agent "knows" it.
+- **A document you did not search for is a document you did not upload.** After ingestion,
+  run `search_knowledge_base` for a term that exists **only** in that text, and read the
+  `knowledgeBase` census that comes with an empty result: `total: 0` means the base was
+  never populated (a different problem from "not found"), and `awaitingIndexing`/`processing`
+  mean you looked too early. Skipping this check is how four missing files stayed invisible
+  through a whole migration.
 - **Search it with literal terms** — section names, numbers, acronyms. Generic queries
   fall below the similarity threshold and come back empty, which reads exactly like
   "there is no data".
@@ -141,9 +167,29 @@ consumes it), **3** (the agent "can't write" and nobody knows why), and treating
 ## Squads — a DAG with a declared time budget
 
 - **Born a draft.** Nothing runs until it is activated; a scheduled draft never fires.
-- **Two ceilings, not one.** The synchronous leg cuts at **270s**; the step ceiling
-  reaches **1800s** and only buys you anything when the work goes to background.
-  Design the steps around that before writing them.
+- **Three ceilings, and the smallest one governs.** The **inline turn** of an agent step
+  ends at **~245s** (the HTTP leg under it stops at 270s and the model needs the difference
+  to write its final answer); the step's `timeoutSeconds` reaches **1800s** and only buys
+  you anything once the work goes to **background** (~20 min, collected by polling). Design
+  the steps around the 245 before writing them: a step that will not finish inline must be
+  split or sent to background, and `timeoutSeconds: 1800` on an inline step is a number that
+  decides nothing. The run projection reports which one actually applied
+  (`effectiveTimeoutSeconds`, with `configuredTimeoutSeconds` beside it when you asked for
+  more).
+- **The edge is the only transport.** A step receives the whole output of its **parents** —
+  parents, not ancestors — and nothing else. An `approval` between producer and consumer
+  forwards the decision, not the dossier: when the consumer needs the data, draw the edge
+  from the producer as well. Ask, per step, "what does this need to read?", and let each
+  answer be an edge.
+- **A step that declares failure in prose still succeeds.** Agents told to answer `FALHA: …`
+  do it, and the step closes `completed` while the DAG walks on to the human gate. Declare
+  **`failureMarker`** on the agent step's `config` when you want the declaration to actually
+  fail the step and cancel what follows; without it, the projection only signals it
+  (`selfDeclaredFailure`).
+- **Every execution parameter needs a contract or a step.** The trigger is free text: a
+  value that four parallel steps depend on and that nothing validates will be missing on the
+  day it matters. Declare a typed **`trigger_schema`** so the run is refused before the first
+  step is spent, or make the value the output of a step that fixes and emits it.
 - **A run freezes the definition it started with.** Raising a timeout does not rescue a
   run already in flight, and neither does retrying a step — only a new run picks it up.
 - **Judge a live step by its heartbeat**, not by the absence of an anomaly flag.
@@ -162,6 +208,21 @@ consumes it), **3** (the agent "can't write" and nobody knows why), and treating
 - **Unpublishing leaves the app revoked, and revoked is still editable.** Edit it;
   never recreate. Recreating loses the link, the history and every adjustment made
   since.
+
+## Artifacts — decide whose identity the output wears
+
+One line, and it is a design decision, not a tool-call detail:
+
+> **An artifact with an identity of its own → `renderizar_pdf`. An artifact that should
+> wear AFL's identity → `criar_documento`.**
+
+`criar_documento` assembles a document from structured content **using the AFL template and
+ignoring HTML/CSS**; `renderizar_pdf` renders a page through a headless browser and
+preserves fonts, colors, positioning and page breaks. So a report whose specification *is*
+its layout — fixed section order, brand hex colors, severity badges, conditional row colors —
+loses precisely what was specified when it goes through the first one. Decide this when you
+design the artifact, while the specification is in front of you; discovering it later means
+comparing two tool descriptions and rebuilding.
 
 ## Verify what you built — the last step, not an optional one
 
@@ -194,6 +255,9 @@ your own previous message describe what was true when they were written.
 | A source scoped to the whole instance | Write access nobody intended, granted to every agent that consumes it |
 | A count written into a prompt | Confident, precise, wrong — with the shape of a fact |
 | The same text in three places, unnamed | Semantic search returns two different answers to one question |
+| Method parked in the knowledge base | Every turn opens with a fragile search for a string you already knew |
+| A source judged by its scope instead of by a read | Exemplarily bounded, perfectly connected, unable to return a row |
+| A layout-defined artifact sent through `criar_documento` | The specification survives in the prompt and in nothing else |
 | Rewriting a whole prompt to change one line | A silent edit of everything you re-emitted from memory |
 | Recreating an app instead of editing it | Link, history and versions gone |
 | Publishing straight to public | An anonymous visitor executing on the owner's credential |

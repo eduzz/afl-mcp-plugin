@@ -92,11 +92,18 @@ list does not carry the manifest — to read what an app actually authorizes, us
 **`mcp__afl__get_app_web`** (see "Reading an app's contract" below).
 
 **4. `chat_with_agent` inside a squad step ≠ `chat_with_agent` directly.**
-A squad step runs with the step's `timeoutSeconds` and, in the synchronous leg, a
-**270s** HTTP ceiling. The same prompt that finishes in a direct call — where your
-client can move it to background — can blow the deadline inside a step. Work that
-does not fit in 270s must go to background, and only then does a `timeoutSeconds`
-above 270 (up to 1800) buy you anything.
+A squad step's `timeoutSeconds` reaches 1800, but the turn the agent answers **inline**
+is cut at **245s** — the HTTP leg under it stops at 270s and the model needs the
+difference to write its final answer. The same prompt that finishes in a direct call —
+where your client can move it to background — blows the deadline inside a step, and the
+tools dispatched in the last act come back with `durationMs: 1` and "the task deadline
+was reached before this tool finished". Work that does not fit in 245s must go to
+**background** (`executar_em_background`, ~20 min, collected by polling), and only then
+does a `timeoutSeconds` above 245 buy you anything. Do not calibrate from the number the
+field accepts: `get_squad` publishes the arithmetic per agent step in **`turnBudget`**
+(`configuredTimeoutSeconds`, `effectiveInlineTurnSeconds`, `inlineTurnCapSeconds`), and
+`create_squad`/`update_squad` warn — without refusing, since the background path
+legitimately uses the larger number.
 
 **5. Judge a running step by its heartbeat.** See `get_squad_run` below: fresh
 heartbeat with `elapsedSeconds` climbing = working. `overdue` is anomalous and
@@ -165,7 +172,15 @@ JSON, no model in the middle); for a JUDGEMENT
   - `mcp__afl__search_knowledge_base` `{ agentId, query }` — hybrid semantic+keyword
     search over the agent's indexed KB. **Use specific, literal terms** (names,
     numbers, section titles); generic queries fall below the similarity threshold and
-    return `[]`.
+    return `[]`. **Its write counterpart is `create_knowledge_document`** (`tools:write`) —
+    the base is not read-only from here, and believing it was cost one migration four of
+    its five documents. **An empty result now comes with a census instead of a shrug**:
+    `knowledgeBase: { total, critical, awaitingIndexing, processing }` plus a diagnostic
+    sentence. Read it before concluding anything, because the two cases need opposite
+    fixes: `total: 0` means **nothing was ever written** ("not found" is not even the
+    question); `total > 0` with an empty result means the document is there and your query
+    did not match it. `critical` documents are injected, never indexed, so they can never
+    appear in a search; `awaitingIndexing`/`processing` mean **wait and search again**.
   - `mcp__afl__jira_search` `{ agentId, query, project?, maxRows?, verbosity? }` —
     `query` is **JQL** (e.g. `ORDER BY created DESC`, `project = AV AND status = "In
     Progress"`). Never pass natural language as JQL. Each issue carries `key`, `id`
@@ -534,7 +549,21 @@ lacks it — surface verbatim):
     ORIGINAL accents and casing, which is exactly what a `de` needs. A page is tens of
     KB, so content is capped and any cut is announced (`truncado: true`): **cut content
     is not missing content** — refine with `busca` before concluding a section is absent.
-- **Feed the knowledge base** → `mcp__afl__gerenciar_documentos` (`tools:write`)
+- **Put a document INTO the knowledge base** → `mcp__afl__create_knowledge_document`
+  (`tools:write`) `{ agent_id, title, content | file_key | file_url, filename?,
+  source_url?, is_critical? }` — the symmetric write to `search_knowledge_base`, and the
+  one to reach for when migrating content into AFL. `agent_id` and `title` are required and
+  exactly one body (`content` / `file_key` / `file_url`) must be present — a call with no
+  body is refused before it goes anywhere. It is a thin facade over
+  `gerenciar_documentos` `op: "adicionar"` (same executor, same permissions, same
+  asynchronous extraction/vectorization), so use the native one for `op: "listar"` /
+  `"remover"`. **Indexing is asynchronous** — a search fired immediately after may still
+  return nothing; confirm with `op: "listar"` before concluding anything. And
+  `is_critical: true` documents are **injected into the prompt, not indexed**, so
+  `search_knowledge_base` will never return them: verify those by asking the agent to
+  quote a literal line (and note that only the 3 most recent critical docs reach the
+  prompt).
+- **Feed the knowledge base (full surface)** → `mcp__afl__gerenciar_documentos` (`tools:write`)
   `{ agentId, op: "adicionar", titulo, conteudo? | file_key? | file_url?, nome_arquivo?,
   is_critical? }`. `conteudo` is already-extracted text; **`file_key`** takes a file
   exported from another integration (same interchangeable key as `jira_anexar_arquivo`)
@@ -593,8 +622,13 @@ lacks it — surface verbatim):
   `{ agentId, html? | url?, titulo?, formato_pagina?, orientacao?, margens?, esperar_seletor? }`.
   Headless-browser render: preserves fonts, colors, positioning and page breaks — the
   PDF looks like the screen. This is NOT `criar_documento`, which builds a document from
-  structured content using the AFL template and ignores HTML/CSS. "Make me a report" →
-  `criar_documento`; "save THIS page/HTML as PDF" → `renderizar_pdf`. Same output contract
+  structured content using the AFL template and ignores HTML/CSS. The rule that decides it
+  in one line: **an artifact with an identity of its own → `renderizar_pdf`; an artifact
+  that should wear AFL's identity → `criar_documento`.** So "make me a report" →
+  `criar_documento`; "save THIS page/HTML as PDF" → `renderizar_pdf`; and a report whose
+  spec *is* fixed section order, brand hex colors, severity badges and conditional row
+  colors → `renderizar_pdf`, because `criar_documento` would silently discard exactly the
+  part that was specified. Same output contract
   (`data.url` + `data.s3Key`). Private/internal URLs are blocked; login-gated pages accept
   `headers`, but only for domains the renderer allows.
 - **Edit a file you generated** → `mcp__afl__editar_documento` (routes by extension) or
@@ -622,7 +656,11 @@ lacks it — surface verbatim):
   `toolCallsCount: 0` with a big `contentChars` means the agent only *wrote text* —
   a plan or a promise ("awaiting the knowledge-base lookup") — without consulting
   anything, and by every other field it looks exactly like a real dossier
-  (`completed`, `hasContent: true`). Same rule as `_meta.toolCalls` in
+  (`completed`, `hasContent: true`). **The counter can also lie in your favour**: one
+  step made **three** calls, **all `ok`** in 37–45 ms, collected nothing, and reported
+  "the analyses are processing, I will return with the consolidated data" — a background
+  that does not exist. `ok` is a statement about the call, not about the data: read the
+  tool *results*, and treat a suspiciously fast `ok` with an empty payload as a failure. Same rule as `_meta.toolCalls` in
   `chat_with_agent`: cross the prose with the record. A step's `toolCalls` carry
   **`truncated`/`originalChars`/`deliveredChars`** with the same meaning as above —
   read them before concluding anything about *why* a step returned what it returned,
@@ -666,7 +704,8 @@ lacks it — surface verbatim):
   `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`).
   A step's `type` is one of **five**, and each one needs a **different `config`** —
   an incomplete `config` fails the whole DAG, so get it right up front:
-  `agent` → `{ agentId, instructions?, readOnly? }` · `automation` → `{ automationId }` ·
+  `agent` → `{ agentId, instructions?, readOnly?, failureMarker? }` ·
+  `automation` → `{ automationId }` ·
   **`approval`** (human gate, pauses the run) → `{ approverUserIds: [...] }` **or**
   `{ approverGroupRole: "admin" | "member" }` — **one of them is mandatory**
   (optional: `message`, `expiresInHours`, default 168) ·
@@ -693,7 +732,11 @@ lacks it — surface verbatim):
   calling a write tool of the server) and the delegating ones
   (`executar_em_background`, `executar_squad`, `mencionar_agente`), which would run
   in a turn where the policy is not re-evaluated. The read allowlist is the
-  platform's and **denies what it cannot classify**.
+  platform's and **denies what it cannot classify** — which includes tools that reach the
+  agent through a **skill**, even genuinely read-only ones. Setting `readOnly` on every
+  non-writing step is right, and it can still be what switches off the last read path the
+  step had: when a step depends on a tool the allowlist does not know, decide that
+  deliberately instead of discovering it as `Recusado pela política do step` mid-run.
   **There is no per-step tool selection, deliberately.** An `allowedTools` list
   existed briefly and was removed: choosing *which* tools an agent uses is the
   **agent's** configuration, and a per-step list would be a second source of truth
@@ -747,9 +790,33 @@ lacks it — surface verbatim):
   Step limits are enforced at the boundary with a message that names the field:
   `timeoutSeconds` 30–1800 (default 170), `maxRetries` 0–3, `retryDelaySeconds` 5–300.
   An `agent` step may now hand long work to a **background task** and wait for it, which
-  is why the ceiling is 30 min — but the *synchronous* leg is still capped at **270s**
-  (an HTTP limit). So: work that fits inline must fit in 270s; work that doesn't must go
-  to background, and only then does a `timeoutSeconds` above 270 buy you anything.
+  is why the ceiling is 30 min — but the turn the agent answers **inline** is capped at
+  **245s** (270s of HTTP minus the margin the model needs to write the final answer). So:
+  work that fits inline must fit in 245s; work that doesn't goes to background, and only
+  then does a `timeoutSeconds` above 245 buy you anything. Above it the tools
+  create/update **warn** instead of refusing (refusing would kill the background path and
+  break every squad already carrying 1800), and `get_squad` attaches the resolved
+  **`turnBudget`** to each agent step so the two numbers never have to be reconciled by
+  hand.
+  **A step that declares its own failure in prose still closes `completed`.** Six agent
+  steps in one production run answered `FALHA: …`, exactly as their prompts told them to,
+  and the DAG walked node by node to the human gate, which then sat three days waiting for
+  approval of an empty set (`"error": null` on the envelope throughout). Set
+  **`config.failureMarker: "FALHA"`** on the agent step to give that declaration authority:
+  an output starting with the marker fails the step, enters the normal retry/cascade path
+  and cancels the descendants. It is deliberately **opt-in and never a heuristic** — an
+  honest report *describes* the failures it found, so hunting for error words would fail
+  the good result. Without the field the run projection still **signals** it
+  (`selfDeclaredFailure: true` on the step), and signalling is not deciding.
+  **A trigger contract, so a run is refused before it spends a step.** `create_squad` and
+  `update_squad` take **`trigger_schema`**: `{ fields: [{ key, label, type: "string" |
+  "date" | "number" | "enum", required, options?, description? }] }`. `run_squad` then
+  takes the values in **`inputs`**, a missing `required` field refuses the trigger up
+  front, and the values are appended to the trigger message as a stable
+  `[ENTRADA DO DISPARO]` block the steps can quote. Without it the trigger is free text:
+  four root steps once fired in parallel on a reference date nothing guaranteed, and the
+  first one answered "FALHA: the reference date was missing from the trigger". An
+  `approval` step is not a substitute — it collects a **decision**, not a typed **value**.
   A squad is born as a **draft** (`is_active=false`) for review in the builder unless
   you pass `is_active: true`.
   Squads created through the hub are **agent-triggerable by default** (`allow_agent_trigger`
@@ -827,10 +894,29 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   **`mcp__afl__create_agent`** (scope `agents:write`): without `organization_id` it creates
   a **personal** agent (only `name` ≥3 chars required); with `organization_id` it creates an
   **org** agent (requires `name` + `prompt`, and the user must be **admin/owner** of the
-  org). Other optionals: `description`, `prompt` (system instructions), `level` (personal
+  org). Other optionals: `description`, `prompt` (system instructions), **`agent_type`**
+  (the subtype — see below), `level` (personal
   only), `temperature` (0–2), `category`/`target_audience` (personal only),
   `avatar_icon`, `avatar_color`, and `group_ids` (org only — see below).
   **The model is not one of them** — see the note below.
+  **`agent_type` is the one model lever a tool has.** It is the same value `get_agent`
+  returns as `agentType`, and it is the matrix's subtype row: precedence is *agent's own
+  model → **subtype** → functionality → default*. Omitted, an agent is born `assistant`,
+  usually the cheapest mapping — so a whole squad built through the hub runs on the small
+  model unless you say otherwise, which is invisible from every listing. It is an enum
+  (`assistant`, `analyst`, `researcher`, `advisor`, `teacher`, `coach`, `creative`,
+  `developer`, `support`, `custom`; `alter`/`role` are personal-only) because a value
+  outside the list does not fail — it just matches no matrix row and falls back to the
+  generic model, in silence. Two consequences worth planning around:
+  - **Setting a subtype does not promise a better model.** It selects the matrix *row* an
+    admin configured; a subtype with no row simply falls through to the `chat` functionality.
+    Confirm the outcome in `get_squad` → `modelResolution` (or the turn record) instead of
+    assuming the write bought you anything.
+  - **On an ORG agent the subtype can only be set at creation.** `update_agent` refuses
+    `agent_type` for an organization agent — explicitly, changing nothing — because the
+    internal route it uses does not carry the field; accepting it would report "updated" for
+    a write that never happened. So order the migration accordingly: decide the subtype
+    **before** `create_agent`, or change it in the organization's UI.
   **`mcp__afl__update_agent`** `{ agent_id, ... }`
   (`agents:write`) patches fields (omitted = preserved; on an org agent `category`/`is_active`
   are ignored and `group_ids` **redefines** the groups).
@@ -1335,7 +1421,10 @@ prose around it is confident.
   `chat_with_agent` when they want an interpreted answer ("resume", "analise", "o que
   mudou").
 - **Iterate queries:** if `search_knowledge_base` returns `[]`, retry with more
-  specific/literal terms before concluding there's no data.
+  specific/literal terms before concluding there's no data — and remember that `[]` is a
+  fact about the **index**, not about the corpus: it looks identical whether the document
+  is missing, still processing, or `is_critical` (injected, never indexed). Check with
+  `gerenciar_documentos op: "listar"` before telling anyone the agent does not know it.
 - **Multi-turn:** keep the `conversationId` to preserve context across
   `chat_with_agent` calls.
 - **Report tool errors verbatim** to the user (don't silently swallow) — they usually
