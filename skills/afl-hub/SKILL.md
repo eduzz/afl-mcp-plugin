@@ -1205,12 +1205,19 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     If it ever comes back `false`, the answer says so with a `warning`: do **not** wire that
     source to an agent — repair it with `update_data_source { data_source_id,
     integration_uuid }`, or build it in the UI.
-  - **Databricks/Genie is the exception that is NOT a data source.** `databricks_genie`
-    (and `databricks_table`) *are* valid `sourceType`s, so the call is **ACCEPTED** — and
-    it **enables nothing**: asking Genie a question is a **platform SKILL** capability
-    (`native-databricks-genie-*`) over the organization's Databricks integration, not a
-    source capability. The trap is that the accepted-and-inert source looks exactly like a
-    working one. The chain that actually works:
+  - **Databricks: the two types behave in OPPOSITE ways.** `databricks_table` is a real
+    source — connect it to an agent and it gains SQL reading (`datasource_databricks`, one
+    single `SELECT` per query). Its scope is **mandatory** and lives in `config`:
+    `{ databricksCatalogs, databricksSchemas, databricksTables (qualified
+    catalog.schema.table), databricksWarehouseId? }`. A source created with **no** scope is
+    accepted and then **refuses to read at runtime** — declaring nothing would hand the
+    agent the whole workspace under the service principal's credential. Writing has no path
+    at all: `INSERT`/`UPDATE`/DDL are refused even with `allow_agent_write: true`.
+  - **`databricks_genie` is the exception that is NOT a data source.** It *is* a valid
+    `sourceType`, so the call is **ACCEPTED** — and it **enables nothing**: asking Genie a
+    question is a **platform SKILL** capability (`native-databricks-genie-*`) over the
+    organization's Databricks integration, not a source capability. The trap is that the
+    accepted-and-inert source looks exactly like a working one. The chain that actually works:
     `list_integrations { integration_type: "databricks" }` (get the workspace) →
     **`mcp__afl__list_genie_spaces`** `{ organization_id?, integration_uuid? }`
     (`datasources:read`) → `list_skills { search: "genie" }` → `enable_agent_skill` on the
