@@ -141,16 +141,28 @@ treating any claim of execution as fact. If the prose says a tool ran and it is 
 there with status `ok`, it did not run; and `tools: NENHUMA` means the answer came
 from the prompt alone. See "Reading the turn record" below.
 
-**10. A Google data source must declare WHICH Google service it is.** The
-`source_type`s `google_drive_file`, `google_drive_folder` and `google_services_data`
-are shared by Gmail, Calendar and Drive, so they say nothing on their own.
-`config.googleSourceType` is **mandatory** on those three (`gmail | drive | calendar
-| meet | sheets | docs | slides | forms`) — without it `create_data_source` is
-**refused**, naming the field. That refusal is the feature: it used to be accepted,
-and the source then showed `isActive: true` in the listing, connected to the agent
-without complaint, and **every read failed** with "Integração Google não configurada"
-— an error pointing at the integration (which was fine) instead of at the missing
-field. See "Manage data sources" below.
+**10. A Google data source needs BOTH the integration and the service.** Two
+separate fields, two separate refusals, and each one used to be a source that looked
+healthy and failed only at read time.
+
+`integration_uuid` is **mandatory on every non-public Google `source_type`**
+(`google_sheet`, `google_doc`, `google_drive_file`, `google_drive_folder`,
+`google_services_data`, `google_forms`) — get it from `list_integrations`. Without it
+the sync cannot find a credential and dies with "Integration not found", an error
+pointing at the integration instead of at the field you skipped. Until 2026-08-21 the
+hub accepted it and `list_source_types` even reported `requiresIntegrationUuid: false`
+for these types; that is exactly how four automations of one account spent a day
+reporting to their owner that his (perfectly connected) Google was missing. The
+`_public` variants keep dispensing it — they read a web-published file and have no
+credential by definition.
+
+`config.googleSourceType` is **mandatory** on the three ambiguous types
+(`google_drive_file`, `google_drive_folder`, `google_services_data`), which are shared
+by Gmail, Calendar and Drive and so say nothing on their own: `gmail | drive | calendar
+| meet | sheets | docs | slides | forms`. Without it `create_data_source` is
+**refused**, naming the field — it used to be accepted, and the source then showed
+`isActive: true` in the listing, connected to the agent without complaint, and **every
+read failed**. See "Manage data sources" below.
 
 ## Which tool to use
 
@@ -1249,10 +1261,15 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     exists. That denial never says "there is no integration". An organization uuid requires
     **active membership**, and a failure to *evaluate* that authorization denies as a
     precaution — it never means "does not exist".
-  - **Google sources must declare the service** (rule 10). On `google_drive_file`,
-    `google_drive_folder` and `google_services_data`, `config.googleSourceType` is
-    **required** — `gmail | drive | calendar | meet | sheets | docs | slides | forms`
-    — and its absence is a refusal, not a warning. Minimal example:
+  - **Google sources need the integration AND the service** (rule 10).
+    `integration_uuid` is **required on every non-public Google type** (`google_sheet`,
+    `google_doc`, `google_drive_file`, `google_drive_folder`, `google_services_data`,
+    `google_forms`) — take it from `list_integrations`; its absence is a refusal, and
+    nothing is created. On top of that, on the three ambiguous types
+    (`google_drive_file`, `google_drive_folder`, `google_services_data`),
+    `config.googleSourceType` is **required** — `gmail | drive | calendar | meet |
+    sheets | docs | slides | forms` — and its absence is a refusal too, not a warning.
+    Minimal example:
     ```
     create_data_source({ source_type: "google_drive_file", name: "Agenda comercial",
                          integration_uuid: "...", config: { googleSourceType: "calendar" } })
@@ -1260,7 +1277,8 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     The value lives in two places (the `google_workspace_subtype` column, which the
     runtime reads first, and `config.googleSourceType`); the hub now **derives one
     from the other and writes both**, so sending either is enough. Types that already
-    name the service (`google_sheet`, `google_doc`, `google_forms`) need nothing.
+    name the service (`google_sheet`, `google_doc`, `google_forms`) need no
+    `googleSourceType` — but they still need `integration_uuid`.
 - **`mcp__afl__update_data_source`** (`datasources:write`):
   `{ data_source_id, organization_id?, allow_agent_write?, write_permission_note?, name?,
   description?, config?, integration_uuid?, sync_frequency?, is_active? }` — edits a source
