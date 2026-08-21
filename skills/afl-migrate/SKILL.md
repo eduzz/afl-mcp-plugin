@@ -14,12 +14,13 @@ description: >-
 
 # Porting an existing pipeline into AFL
 
-`afl-design` assumes you start from a ritual. This one assumes you start from something
-that **already works** — and the danger is different: you will be tempted to copy the
-*shape* instead of translating the *intent*.
+`afl-design` covers building from scratch — it points at `mcp__afl__planejar_estrutura`, and
+the design doctrine (routing question, build order, scope) comes back inside that tool's
+result. This one assumes you start from something that **already works**, and the danger is
+different: you will be tempted to copy the *shape* instead of translating the *intent*.
 
-Read **`afl-design`** for the routing question and the build order, and **`afl-hub`** for
-signatures. Do not restate them here.
+So: call **`planejar_estrutura`** (via **`afl-design`**) for the routing question and the build
+order, and read **`afl-hub`** for signatures. Do not restate either here.
 
 Numbers below come from two measured migrations — **2026-08-04** (five agents, one
 framework) and **2026-08-20** (nine steps, four agents, audited run by run). They are
@@ -393,8 +394,8 @@ discover it before running — so budget for one throwaway run.
 3.  Classify every data/ file   method → skill · corpus → knowledge base · none left over
 4.  Map every source            data source? native skill? no equivalent?
 5.  Prove each source EXECUTES  one real read through the carrier — scoped is not readable
-6.  Route each piece            afl-design's routing question
-7.  Build in afl-design's order source → write → scope → agent → connect → skill → document → squad
+6.  Route each piece            `planejar_estrutura.planejar` — one call per piece
+7.  Build in the plan's order   source → write → scope → agent → connect → skill → document → squad
 8.  Rewrite the prompts         method comes from the skill; keep persona; stopping rule
                                + `failureMarker`; right tool per artifact
 9.  Draw the DAG                one edge per `inputFile` (conversion table), `approval` at

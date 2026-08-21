@@ -27,8 +27,9 @@ agent first.
 
 This skill answers **how to call** the hub. When the question is **what to create** —
 should this be an agent, a skill, a data source, a knowledge document, a squad or a
-web app, in which order, with which scope — read **`afl-design`** instead, and come
-back here for the signatures.
+web app, in which order, with which scope — that answer comes from
+**`mcp__afl__planejar_estrutura`** (read-only; see **`afl-design`**), and you come back
+here for the signatures.
 
 ## Golden workflow (always)
 

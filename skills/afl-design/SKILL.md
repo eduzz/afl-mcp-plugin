@@ -13,251 +13,28 @@ description: >-
 
 # Designing an AFL structure
 
-Everything in AFL runs in the context of an **agent** you choose — the agent carries
-the organization, the connected sources and the credentials. So the design question
-comes before the tool question. This skill answers the design question. For tool
-signatures, return shapes and parameter traps, read **`afl-hub`** — do not restate
-them here. And when the structure already exists somewhere else — a pipeline running in
-CrewAI/LangGraph, a repo of prompts, a runbook — read **`afl-migrate`** first: porting is
-translating the intent, not copying the shape, and starting from the ritual is the wrong
-starting point when a working one is already in front of you.
+**The doctrine is not in this file.** It lives in the platform (`architecture-doctrine.ts`, AFL
+monorepo), served cut to the case inside one tool result. A second long copy drifts, so design
+guidance you are tempted to write here belongs there, and this file stays a pointer.
 
-## The one question that routes everything
+## What to do
 
-> **Is this capability, instruction, data, orchestration, surface, or a service role?**
+1. **`mcp__afl__planejar_estrutura`** — read-only, four actions, in this order:
+   `mapear` (what exists in scope) → `diagnosticar` (the gaps) → `planejar`
+   (`tipo`: `agente | skill | fonte | documento | squad | automacao | app | grupo`) →
+   `verificar` (after building — the last step, not an optional one).
+2. **Follow the plan it returns.** It carries the doctrine for that type and names the execution
+   tool per step. Never invent a step it did not name, nor answer the design question from memory.
+3. **Execute with the tools from `afl-hub`** (signatures, return shapes, parameter traps).
+   Porting something that already runs elsewhere? Read **`afl-migrate`** first.
 
-| The answer is… | Build a… | The symmetric mistake |
-|---|---|---|
-| **Capability** — reach a system | **data source**, connected, `allow_agent_write` if it writes | creating a skill and expecting access |
-| **Instruction** — how to decide, what never to do | **prompt skill** | spawning an agent just to carry a text |
-| **Data** — full text, minutes, a contract | **knowledge document** | pasting 30 KB into a skill prompt |
-| **Orchestration** — steps with dependencies | **squad** (a DAG) | re-chaining it by hand every run |
-| **Surface** — someone outside must fill in or read | **web app**, audience `organizacao` | asking the person to dictate while you type |
-| **Service role** — who carries the credential | **agent** | one agent per topic instead of per credential |
+## Four things that only apply to an MCP client
 
-Get this wrong and the structure still *looks* right. That is the whole problem.
-
-**Start from the ritual, not from the component.** A structure grown from the
-platform's feature list becomes a collection; one grown from the recurring ritual
-(register, qualify, audit, report) becomes a pipeline. List the rituals first, then
-ask the routing question once per ritual.
-
-## Build order — and what breaks if you skip a step
-
-```
-1. OAuth integration (AFL UI)      no integration_uuid without it
-2. data source                     born READ-ONLY
-3. allow_agent_write (if writing)  otherwise the write tools are not even exposed
-4. scope the source                least privilege: project keys / JQL / folder
-5. agent                           the carrier; an org agent needs prompt + admin/owner
-6. connect source ↔ agent          explicit opt-in
-7. skill                           instruction; enabled per agent, opt-in
-8. knowledge document              full text; asynchronous — confirm processing
-9. squad                           DAG; born a draft; schedule optional
-10. web app                        org audience; destination frozen in `bind`; publishing is human
-11. verify                         list it back and read the state, not the return value
-```
-
-The three expensive skips: **4** (a broad source hands power to every agent that
-consumes it), **3** (the agent "can't write" and nobody knows why), and treating
-**11** as optional.
-
-## Agents — carriers, not personas
-
-- **An agent is defined by what it reaches**, not by its name or its persona. Name and
-  description are labels; `dataSources` is the fact.
-- **Pick the carrier from `dataSources`, never from the name.** `list_agents` returns
-  each source with `sourceType`, `allowAgentWrite` and, for Jira, `jiraProjects`. That
-  is what answers "which agent can write in project X". Guessing from the name costs a
-  failed write — and the failure can surface as a permission complaint about the wrong
-  thing.
-- **One source per provider per agent.** Two Jira sources (or two SharePoint sources)
-  on the same agent make resolution ambiguous, and the read tools then demand you name
-  the source. Design it away instead of disambiguating at every call.
-- **A service agent does one job.** Split by credential and responsibility (collector /
-  applier of a rule / publisher), not by subject. It keeps least privilege real and
-  makes the access review short.
-- **An empty `description` is debt.** `capabilitySummary` is served from cache and comes
-  back `null` until it is computed; when the description is empty too, nothing but trial
-  and error is left for whoever picks the agent later.
-- **A visible naming convention beats a taxonomy.** A prefix (`GOV — …` for agents,
-  `gov-ia-*` for skills) makes a family legible in a flat list. Listings are flat.
-
-## Data sources — where least privilege lives
-
-- **Scope the source, not the agent.** A Jira source restricted to one project key
-  bounds every agent that consumes it. The project scope binds **all** writes —
-  comment, transition, field update, create — not just issue creation.
-- **Writes are opt-in per source.** A fresh source plus a connection is *not* enough to
-  write; `allow_agent_write` is a separate switch and takes effect immediately.
-- **A source name is not an id.** Nothing stops two sources sharing a name, and an
-  exact collision makes resolution fail (by design — it used to pick one). Name sources
-  for what they *reach*: `Jira LAB — Governança de IA` beats `Jira`.
-- **Write down why the write is allowed.** `write_permission_note` exists for the audit
-  you will run later.
-- **A scoped source is not a readable source — prove the read path executes.** A source can
-  be created, bounded to named tables, marked `allowAgentWrite: false`, connected to the
-  agent, listed correctly and drawn as an `acessa` edge in the topology, and still have **no
-  tool that can read a row from it**. That is not hypothetical: it took a live run to find,
-  because every configuration reading said it was fine. Do one real read through the carrier
-  agent and look at the rows before you design anything on top. And read the *result*, not
-  the status — an empty tool name returned with `status: ok`, or an `ok` in 40 ms with no
-  data, is "no path" wearing the grammar of "yes".
-- **`readOnly` on a step denies what it cannot classify — including read-only tools that
-  arrive through a skill.** Marking every non-writing step `readOnly` is right, and it can
-  still switch off the one read path that was left. When a step must use a tool the
-  allowlist does not know, that is a design decision to make deliberately (and to record),
-  not a surprise to meet at runtime.
-
-## Skills — instruction, not capability
-
-- **A skill grants instruction; a source grants capability.** The native tools are the
-  agent's default capability — an agent with zero skills already writes Notion pages
-  and searches Jira. Enabling fifteen skills does not widen reach; it inflates every
-  turn.
-- **One skill per decision, not per document.** "How to classify a track", "how to
-  apply the matrix", "where each artifact gets published". One skill per source file
-  produces overlapping skills and an agent that cannot tell which one governs.
-- **Never hard-code a count.** Component counts change without the text changing: a
-  skill claiming "6 agents, 7 skills, 2 squads" was read against a platform holding
-  8/10/4. Put the **method to check** in the prompt, and make measured facts carry
-  their date in the sentence — "as of 29/07 there were 8" survives; "there are 8" rots
-  silently.
-- **Say what must never be inferred.** The most valuable block in a mature skill is the
-  list of facts that are plausible-but-wrong when reconstructed from memory. Write them
-  as "never rewrite these from your head".
-- **Edit with an anchor; a full rewrite is a different operation.** `prompt_injection_edits`
-  applies literal, unique substitutions to the current value and **fails** when the
-  anchor does not match. That failure is the cheap detector that someone else changed
-  the text since you read it. Resending the whole prompt means re-emitting from memory
-  a text you were not asked to rewrite — in an org skill, shared by everyone.
-- **Skills are opt-in per agent.** Creating one changes nothing until it is enabled.
-- **Reading usage:** a prompt skill reports `usageMeasurement: "not_instrumented"`,
-  so `usageCount` comes back `null`, never `0`. It is injected every turn whether the
-  model leans on it or not — a count there would be a turn count in a usage costume.
-
-## Knowledge documents — when full text beats a skill
-
-- **Skill = rule and method** (short, injected every turn). **Document = the text
-  itself** (retrieved on demand). A 30 KB document inside a prompt is paid on every
-  turn, forever. The sharper form of the same test: **what every execution uses whole is a
-  skill; what you consult a piece of at a time is a document.** A fixed query, a ten-point
-  checklist, the section order of a report are method — they belong in a skill, and they
-  arrive with the turn instead of costing a tool call to fetch.
-- **Never write an instruction that searches for method by literal term.** "Search the
-  knowledge base for the query (literal terms: `foo`, `bar`)" asks a vector search to behave
-  like `grep`, and it puts the most fragile call in the pipeline in the first act of the
-  turn. If you know the literal string the agent must use, it is method: put it in the skill.
-- Ingestion is **asynchronous**: it returns `pending` and is only searchable once
-  processed. Confirm before telling anyone the agent "knows" it.
-- **A document you did not search for is a document you did not upload.** After ingestion,
-  run `search_knowledge_base` for a term that exists **only** in that text, and read the
-  `knowledgeBase` census that comes with an empty result: `total: 0` means the base was
-  never populated (a different problem from "not found"), and `awaitingIndexing`/`processing`
-  mean you looked too early. Skipping this check is how four missing files stayed invisible
-  through a whole migration.
-- **Search it with literal terms** — section names, numbers, acronyms. Generic queries
-  fall below the similarity threshold and come back empty, which reads exactly like
-  "there is no data".
-- **Every copy of a text drifts.** If the same content lives in a repo file, in context
-  documents and on a published page, say so *inside* the skill that covers the subject
-  and state that they move together. Otherwise semantic search will happily return two
-  different numbers for the same question.
-
-## Squads — a DAG with a declared time budget
-
-- **Born a draft.** Nothing runs until it is activated; a scheduled draft never fires.
-- **Three ceilings, and the smallest one governs.** The **inline turn** of an agent step
-  ends at **~245s** (the HTTP leg under it stops at 270s and the model needs the difference
-  to write its final answer); the step's `timeoutSeconds` reaches **1800s** and only buys
-  you anything once the work goes to **background** (~20 min, collected by polling). Design
-  the steps around the 245 before writing them: a step that will not finish inline must be
-  split or sent to background, and `timeoutSeconds: 1800` on an inline step is a number that
-  decides nothing. The run projection reports which one actually applied
-  (`effectiveTimeoutSeconds`, with `configuredTimeoutSeconds` beside it when you asked for
-  more).
-- **The edge is the only transport.** A step receives the whole output of its **parents** —
-  parents, not ancestors — and nothing else. An `approval` between producer and consumer
-  forwards the decision, not the dossier: when the consumer needs the data, draw the edge
-  from the producer as well. Ask, per step, "what does this need to read?", and let each
-  answer be an edge.
-- **A step that declares failure in prose still succeeds.** Agents told to answer `FALHA: …`
-  do it, and the step closes `completed` while the DAG walks on to the human gate. Declare
-  **`failureMarker`** on the agent step's `config` when you want the declaration to actually
-  fail the step and cancel what follows; without it, the projection only signals it
-  (`selfDeclaredFailure`).
-- **Every execution parameter needs a contract or a step.** The trigger is free text: a
-  value that four parallel steps depend on and that nothing validates will be missing on the
-  day it matters. Declare a typed **`trigger_schema`** so the run is refused before the first
-  step is spent, or make the value the output of a step that fixes and emits it.
-- **A run freezes the definition it started with.** Raising a timeout does not rescue a
-  run already in flight, and neither does retrying a step — only a new run picks it up.
-- **Judge a live step by its heartbeat**, not by the absence of an anomaly flag.
-- **Schedule from the hub**, including monthly rituals — a cadence you cannot express
-  ends up on someone's calendar reminder, which is where rituals go to die.
-
-## Web apps — the surface, with the destination frozen
-
-- **Org audience, never public**, unless a specific review says otherwise (the manifest
-  records it as `visibility: org`).
-- **The manifest is the authorization contract.** Whatever decides *where* a write
-  lands — project, issue type, labels — belongs in `bind`, out of reach of whoever
-  fills the form. Free text is fine where it is *content*, never where it *selects*.
-- **A mandatory provenance label** is what makes every record created through a page
-  traceable back to it. Cheap, and the only thing that keeps the audit answerable.
-- **Unpublishing leaves the app revoked, and revoked is still editable.** Edit it;
-  never recreate. Recreating loses the link, the history and every adjustment made
-  since.
-
-## Artifacts — decide whose identity the output wears
-
-One line, and it is a design decision, not a tool-call detail:
-
-> **An artifact with an identity of its own → `renderizar_pdf`. An artifact that should
-> wear AFL's identity → `criar_documento`.**
-
-`criar_documento` assembles a document from structured content **using the AFL template and
-ignoring HTML/CSS**; `renderizar_pdf` renders a page through a headless browser and
-preserves fonts, colors, positioning and page breaks. So a report whose specification *is*
-its layout — fixed section order, brand hex colors, severity badges, conditional row colors —
-loses precisely what was specified when it goes through the first one. Decide this when you
-design the artifact, while the specification is in front of you; discovering it later means
-comparing two tool descriptions and rebuilding.
-
-## Verify what you built — the last step, not an optional one
-
-**Read the system, not the report about the system.** A card, an agent's summary and
-your own previous message describe what was true when they were written.
-
-- List it back through the hub: agents, skills, data sources, squads and apps are all
-  listable there, and an app's effective contract is readable. (Inside an agent's own
-  chat the picture is narrower; do not carry a conclusion from one context into the
-  other.)
-- After a write, read the state — not just the `✅`. A success can still have dropped a
-  field it declares in the response.
-- When a card claims something was published, list the destination folder. That single
-  habit caught a card that was about to be closed on a false claim.
-
-## Three questions and the answer this skill owes
-
-| The user says | The design answer |
-|---|---|
-| "My team fills a form and it becomes a Jira card." | A **web app** with an org audience and project/type/label frozen in `bind` — not a new skill, not a new agent. |
-| "I created the source and connected it, but the agent won't write." | Step **3**: `allow_agent_write` is a separate switch. Then step **4**: check the source's scope covers the target. |
-| "How many GOV agents are there?" | **List them.** Never answer from a prompt, a summary or this conversation. |
-
-## Anti-patterns worth naming out loud
-
-| Anti-pattern | What it looks like later |
-|---|---|
-| A skill created to grant access | The agent still cannot reach anything, and the prompt got heavier |
-| One agent per subject | Ten credentials to review, none with a clear owner |
-| A source scoped to the whole instance | Write access nobody intended, granted to every agent that consumes it |
-| A count written into a prompt | Confident, precise, wrong — with the shape of a fact |
-| The same text in three places, unnamed | Semantic search returns two different answers to one question |
-| Method parked in the knowledge base | Every turn opens with a fragile search for a string you already knew |
-| A source judged by its scope instead of by a read | Exemplarily bounded, perfectly connected, unable to return a row |
-| A layout-defined artifact sent through `criar_documento` | The specification survives in the prompt and in nothing else |
-| Rewriting a whole prompt to change one line | A silent edit of everything you re-emitted from memory |
-| Recreating an app instead of editing it | Link, history and versions gone |
-| Publishing straight to public | An anonymous visitor executing on the owner's credential |
+- **The hub has no chat session.** Every call is stateless and carries its own `agentId`.
+  Pick the carrier agent from `list_agents` → `dataSources`, never from the name.
+- **A destructive write does not execute on its own.** It returns `pending_confirmation`
+  — nothing happened yet — and only `confirm_action` runs it.
+- **Prose is not evidence.** Cross every claim against the block *"AFL · registro
+  verificável do turno"*: a tool not listed there with status `ok` did not run.
+- **No `planejar_estrutura` in `tools/list`?** The server is older than this skill: take
+  the design question to the user's Alter via `chat_with_agent`, and say that is what you did.
