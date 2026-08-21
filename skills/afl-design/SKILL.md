@@ -23,6 +23,12 @@ guidance you are tempted to write here belongs there, and this file stays a poin
    `mapear` (what exists in scope) → `diagnosticar` (the gaps) → `planejar`
    (`tipo`: `agente | skill | fonte | documento | squad | automacao | app | grupo`) →
    `verificar` (after building — the last step, not an optional one).
+   **`planejar` takes two calls.** First without `passos`: it returns the doctrine for that
+   `tipo` and the closed vocabulary of step actions, and **persists nothing**. Then again with
+   `objetivo` **and** `passos` together — the plan is written whole, in one transaction, because
+   a plan with no steps does not exist. Sending `plano_id` **resumes** a plan for reading (its
+   checklist and what is still pending); it does not append steps — if the path changed, design
+   a new plan.
 2. **Follow the plan it returns.** It carries the doctrine for that type and names the execution
    tool per step. Never invent a step it did not name, nor answer the design question from memory.
 3. **Execute with the tools from `afl-hub`** (signatures, return shapes, parameter traps).
