@@ -226,7 +226,11 @@ JSON, no model in the middle); for a JUDGEMENT
     numeric `id` alongside `key`. `microsoft_sharepoint_scan` resolves `site_id`/
     `drive_id` from the agent's SharePoint source — **don't go digging for them**;
     pass `data_source_id` only when the agent has more than one SharePoint source
-    (the tool says so, naming the candidates). Use these to **read the state before writing** instead of burning a
+    (the tool says so, naming the candidates). Since 2026-08-24 both scan and
+    `microsoft_sharepoint_document` also take **`site_name`** or **`site_url`**
+    instead of `site_id`, and `site_id`/`drive_id` are **no longer required** on
+    `_document` — never invent a Graph `site_id` (`host,guid,guid`): if it is
+    missing, the refusal now lists the available sites with each one's id. Use these to **read the state before writing** instead of burning a
     `chat_with_agent`. The export ones (plus `google_drive_read`/`microsoft_onedrive_read`
     with `action: "export"`) return a **`file_key`** — feed it straight into
     `gerenciar_documentos` (knowledge base), `jira_anexar_arquivo` or `hubspot_crm_attach`
