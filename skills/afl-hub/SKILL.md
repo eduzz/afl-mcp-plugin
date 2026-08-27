@@ -1231,7 +1231,8 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   `notion_page`, `notion_database`, `slack_channel`, `slack_data`, `databricks_table`,
   `databricks_genie`, `github_repo`, `api_endpoint`, `webhook`, `database_table`,
   `web_scraping`, `mcp_server`, `hubspot_data`, `linkedin_data`, `microsoft_365_data`,
-  `tuya_devices`, `whatsapp_data`, `jira_data`, `education_platform`. Aliases (`jira`,
+  `tuya_devices`, `whatsapp_data`, `jira_data`, `education_platform`, `meta_ads_data`.
+  Aliases (`jira`,
   `notion`, `databricks`, `postgres`, `sheets`, `mcp`, …) are normalized, and an
   unrecognized type is **refused listing the valid ones** rather than silently accepted.
   **`mcp__afl__list_source_types`** (`datasources:read`, no args, writes nothing) returns
@@ -1241,9 +1242,19 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   source?" — before it, the only way to find out was to attempt a write and read the error.
   Provider specifics go in `config` (e.g. Jira →
   `{ jiraProjectKeys, jiraJqlFilter }`; Notion → `{ notionDatabaseId }`; API →
-  `{ apiEndpoint, apiMethod }`). A source is created **read-only** unless you pass
+  `{ apiEndpoint, apiMethod }`; Meta Ads → `{ adAccountIds, level, defaultDatePreset }`).
+  A source is created **read-only** unless you pass
   `allow_agent_write: true` — plan for that: a fresh source + connect is not enough for
   the agent to write anywhere.
+  - **`meta_ads_data` requires `integration_uuid` AND a non-empty `adAccountIds`.**
+    One Meta login sees N Business Managers × N ad accounts, so a source that does not
+    declare which accounts it covers would read every account the person can see. An
+    empty list is **refused** rather than treated as "all" — there is no implicit
+    wildcard. Metrics are read **live**; only the structure (accounts, campaigns, ad
+    sets) is synced to the knowledge base, so ask `search_knowledge_base` for the real
+    campaign names first and only then query the numbers. Spend carries its own
+    `account_currency` per account: **never sum accounts of different currencies** —
+    report per account instead. The source is read-only; there is no write op.
   - **`mcp_server` requires `integration_uuid`, and the answer tells you whether the link
     took.** The runtime resolves the MCP server by a dedicated column, so a source created
     without the integration would list, hold a full tool catalog and connect to an agent
