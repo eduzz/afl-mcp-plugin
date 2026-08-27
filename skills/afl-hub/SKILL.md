@@ -843,7 +843,25 @@ lacks it — surface verbatim):
   **`mcp__afl__get_squad`** `{ squad_id }` (`squads:read`) returns
   the full definition, then **`mcp__afl__update_squad`** (`squads:write`) applies changes
   — omitted fields keep their value, but `steps`/`edges` are a **full REPLACE**, so
-  resend the whole DAG; `is_active` activates a draft or deactivates a squad, and
+  resend the whole DAG.
+
+  **Reading a BIG squad — `fields`, and the round-trip it must not break.** A large
+  definition stopped fitting in one response (a 21-step squad came back at 75k
+  characters and the call failed on size), so `get_squad` gained `fields`
+  (`auto` | `summary` | `status` | `full`) plus `step_key`/`step_id` for one step in
+  full, mirroring `get_squad_run`. The default `auto` only projects **above ~60k
+  characters** — below it the payload is byte-for-byte what it always was, so no
+  working flow changes. When it does project, the only thing dropped is the TEXT of
+  `config.instructions` (replaced by `instructionsChars` + `instructionsOmitted`);
+  the DAG, `toolPolicy`, `turnBudget`, `modelResolution`, `groupIds` and
+  `triggerSchema` all survive, and a `projection` block says so in the payload.
+  **This matters because `update_squad` is a REPLACE:** resending a projected read
+  would write empty instructions into every agent step. Read with
+  `fields: "full"` whenever the next move is an update — `update_squad` also warns,
+  in `warnings.agentStepsWithoutInstructions`, when it just wrote agent steps with no
+  instructions, which is the signature of exactly that mistake.
+
+  Still on `get_squad`: `is_active` activates a draft or deactivates a squad, and
   `allow_agent_trigger` toggles whether `run_squad` may fire it (so
   `update_squad { squad_id, allow_agent_trigger: true }` unblocks an existing squad). Squad
   tools require a token bound to an organization.
@@ -929,14 +947,26 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
     admin configured; a subtype with no row simply falls through to the `chat` functionality.
     Confirm the outcome in `get_squad` → `modelResolution` (or the turn record) instead of
     assuming the write bought you anything.
-  - **On an ORG agent the subtype can only be set at creation.** `update_agent` refuses
-    `agent_type` for an organization agent — explicitly, changing nothing — because the
-    internal route it uses does not carry the field; accepting it would report "updated" for
-    a write that never happened. So order the migration accordingly: decide the subtype
-    **before** `create_agent`, or change it in the organization's UI.
+  - **It works on ORG agents too — at creation *and* on `update_agent`.** This doc said the
+    opposite for a month: the refusal was real, but it lasted a single day, until
+    `PUT /internal/organization-agents/:id` started carrying the field. Verified end to end
+    (four org agents re-typed through the tool, re-read with `get_agent`). The org list is
+    the nine of `ORG_AGENT_SUBTYPES` — `assistant`, `teacher`, `advisor`, `coach`,
+    `researcher`, `creative`, `analyst`, `developer`, `support`; `alter` is **coerced** to
+    `assistant`, and `custom`/`role` are personal (the internal route does not reject them,
+    but they are outside the org list — do not send them to an org agent). This matters
+    because squads run on ORG agents: without it, an agent born `assistant` would be stuck
+    there for good, since changing it would mean recreating the agent and losing the id
+    every squad step references.
   **`mcp__afl__update_agent`** `{ agent_id, ... }`
   (`agents:write`) patches fields (omitted = preserved; on an org agent `category`/`is_active`
-  are ignored and `group_ids` **redefines** the groups).
+  are ignored — those two, and only those two, are personal-only — and `group_ids`
+  **redefines** the groups). The reply **echoes the fields it changed** under `updated`,
+  with the *effective* value the write returned (so an org `alter` comes back as
+  `assistant`), plus `promptChars` when the prompt changed — never the prompt text. Anything
+  asked for that the write did not confirm is listed apart, under `requestedNotConfirmed`.
+  **Do not call `get_agent` just to verify a write**: it returns the agent's whole prompt,
+  thousands of tokens, to confirm a one-word enum.
 
   > **`max_tokens` and `llm_model` no longer exist on this surface** (removed 2026-08-07),
   > and for the same underlying reason: both looked like controls and decided nothing.
