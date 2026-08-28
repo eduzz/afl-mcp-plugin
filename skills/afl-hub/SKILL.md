@@ -5,11 +5,12 @@ description: >-
   talk to AFL agents, read data connected to them (Jira, HubSpot, Notion,
   knowledge base, databases), write/act through them (create/edit records, with
   confirmation for destructive ops), manage your agents and skills (create/edit/delete,
-  put an org agent in a group, and enable/disable a skill on an agent), and create/run org
-  squads and automations. Use
+  put an org agent in a group, and enable/disable a skill on an agent), create/run org
+  squads, and create/read/edit/delete/run automations. Use
   whenever the user wants to ask/act through their AFL agents, search an AFL
   agent's knowledge base, look up or mutate Jira/HubSpot/Notion or database data
-  that lives in AFL, create/edit an agent or a skill, create/trigger a squad or automation,
+  that lives in AFL, create/edit an agent or a skill, create/trigger a squad,
+  create/edit/switch off an automation,
   or mentions "AFL", "Agents for
   Life", "hub", "meu agente"/"my agent", or an agent by name. Requires the `afl`
   MCP server configured (`claude mcp list` → afl ✔ Connected).
@@ -754,6 +755,24 @@ lacks it — surface verbatim):
   non-writing step is right, and it can still be what switches off the last read path the
   step had: when a step depends on a tool the allowlist does not know, decide that
   deliberately instead of discovering it as `Recusado pela política do step` mid-run.
+
+  **Five families are decided by their ARGUMENT, not by their name** —
+  `datasource_google`, `datasource_jira`, `datasource_mcp`, `planejar_estrutura` and,
+  since this delivery, **`gerenciar_automacoes`**: a `readOnly` step keeps them on offer,
+  and each *call* is classified from what it carries. For automations that is an
+  **allowlist, not a denylist**: only `op: 'listar'` and `op: 'obter'` pass. The six
+  writing ops (`criar`, `atualizar`, `remover`, `ativar`, `desativar`, `executar`) are
+  denied, and so is an `op` that is **absent, non-textual or unknown** — an operation the
+  platform cannot classify does not get through, which is also how a ninth op would be
+  born denied in every step that already exists instead of quietly piercing them. Both
+  spellings the executor actually accepts are recognised (`listar`/`list`, `obter`/`get`);
+  a gate that only knew the Portuguese one would deny exactly the read this fix went in to
+  unlock. **Why the gap existed at all** is the contrast with `gerenciar_squads`, which
+  stays out of the allowlist *because* `consultar_squads`/`consultar_execucoes_squad`
+  exist under their own names. Automations have no such pair —
+  `consultar_resultados_automacoes` reads **executions**, not configuration — so a
+  read-only step that needed to see which automations exist had nothing to call.
+
   **There is no per-step tool selection, deliberately.** An `allowedTools` list
   existed briefly and was removed: choosing *which* tools an agent uses is the
   **agent's** configuration, and a per-step list would be a second source of truth
@@ -952,9 +971,108 @@ lacks it — surface verbatim):
   `scheduleFrequency`, `customScheduleDays`, `customScheduleTime`, `scheduleDayOfMonth`,
   `scheduleMonths`).
 - **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
-  automation (fire-and-forget) → `{ queued, correlationId }`; read history with
-  **`mcp__afl__get_automation_result`** (scope `automations:read`).
-  `mcp__afl__list_automations` (`automations:read`) lists the visible automations.
+  automation (fire-and-forget) → `{ queued, correlationId }`.
+  `mcp__afl__list_automations` (`automations:read`) lists the visible ones.
+
+  **The hub used to be a remote control, not an editor.** Those two plus
+  `get_automation_result` were the whole surface: you could see that an automation
+  exists, make it run, and read what past runs produced — never **what it is**, and
+  never change it. Creating one, fixing a schedule, swapping the analysed source or
+  switching it off meant opening the UI in the middle of a flow the hub was otherwise
+  running end to end (agent, source, skill, squad, app) and stopped exactly there. Four
+  tools close it, and the new scope **`automations:write`** is the boundary: a token
+  that only collects and fires does not gain editing by being on the same table.
+
+  - **`mcp__afl__get_automation`** `{ automation_id }` (`automations:read`) — the
+    **DEFINITION**: name, description, frequency (plus `custom_schedule_*` when it is
+    `custom`), the analysed sources, the analysing agent,
+    `analysis_type`/`analysis_custom_prompt`, `conditions_logic` + `conditions[]`,
+    `actions[]`, `is_active` and the spend cap. Read it **before** `update_automation`,
+    which is a partial patch: without it you do not know what you are preserving.
+  - **`mcp__afl__create_automation`** (`automations:write`) — creates it and returns the
+    `id` (the same one a squad's `automation` step takes in `config.automationId`).
+    Required: **`name`, `frequency` and `data_source_id`**; everything else is optional.
+    **`is_active` comes from the payload**; omitted, it is born **active**. Scope comes
+    from the **token**: with no organization it is born **personal**, with one it is born
+    **in that organization** — which requires being an admin of it, revalidated by the
+    workflow, not by the hub.
+  - **`mcp__afl__update_automation`** `{ automation_id, … }` (`automations:write`) —
+    **partial patch**: an omitted field is **preserved**, what you send replaces. State
+    is not a separate thing here — turning an automation on or off *is* this tool's
+    `is_active`. A patch carrying **no field at all** is **refused before the
+    round-trip**: the empty PATCH would come back `200` having changed nothing, and the
+    echo would read as success.
+  - **`mcp__afl__delete_automation`** `{ automation_id, confirm: true }`
+    (`automations:write`) — the explicit `confirm: true` is **required**; without it the
+    call is refused and **nothing is deleted**. There is no async `confirm_action` card
+    like the write tools have: the caller here is code, so the second step has to fit in
+    the same call.
+
+  Fields accepted by create/update: `name`, `description`, `frequency`,
+  `custom_schedule_days`, `custom_schedule_time`, `data_source_id`, `data_source_ids`,
+  `personal_agent_id`, `analysis_type`, `analysis_custom_prompt`, `conditions_logic`,
+  `conditions[]`, `actions[]`, `is_active`, `monthly_cost_limit_brl`. Three are
+  **required on create only** (`name`, `frequency`, `data_source_id`) and `is_active`
+  **changes meaning** between the two (default `true` on create; "leave it alone" when
+  omitted on update) — which is why the two schemas are not one object.
+  `conditions`/`actions` are **REPLACE**: the array you send replaces the previous one
+  whole. `monthly_cost_limit_brl` is the one field where **`null` is a VALUE** ("remove
+  the cap"), not absence — omitting it preserves what is stored. **`data_source_ids` works
+  in BOTH contexts**: in an organization every id is checked **one by one** and a source
+  from outside the org is refused **naming the offending id**; the main source is folded
+  into the list if you left it out, and an **empty list is a legitimate request** ("back to
+  a single source"). There are **two** `conditionType`s, `always_run` and `custom` — see
+  the automations skill for the catalogue.
+
+  **`group_id`: create only, and it is a REACH decision.** `create_automation` takes
+  **`group_id`**, scoping the automation to ONE group of the organization — only people in
+  it see and trigger it; omitted, it is born visible to the whole org. It needs a token
+  **with an organization** and **org admin/owner**, checked **before** the round-trip:
+  asking for a group in a personal context is **REFUSED, not ignored**, and nothing reaches
+  the server. **`update_automation` does NOT re-scope** — not a product choice: the internal
+  edit DTO does not declare the field and the pipe runs `forbidNonWhitelisted`, so sending
+  it would fail the whole PATCH with a 400. Group scope is set once, at create.
+  One accepted asymmetry: **a GROUP admin with no org role is blocked by the hub's gate**,
+  even though the internal route would accept them. Their path is to **omit `group_id`** —
+  the route then resolves the single group they administer on its own. Closing by default
+  on a question of reach is the right side to err on.
+
+  **On an existing automation the scope comes from the RECORD, and a declared
+  `organizationId` can only REFUSE.** `update_automation`/`delete_automation` decide the
+  context from what is stored on the automation, never from the org being present or
+  absent in the request — otherwise omitting the organization of an ORG automation would
+  drop you into the personal branch, which validates no membership. A declared org that
+  does not match is a **404**, never a wider reach. Mutation authorization mirrors the
+  product's group guard: **org admin passes; a group admin may only mutate an automation
+  scoped to a group they administer; a plain member is barred.**
+
+  **The reply echoes what the SERVER stored, re-read from the database — not the body you
+  sent.** That is what separates "written" from "accepted and dropped": when the echo is
+  your own input, a write lost along the way looks like it worked. Read the echo before
+  claiming the change took.
+
+  **`get_automation` (definition) ≠ `get_automation_result` (history) — the old name
+  does not help.** One answers *what the automation IS*, the other *what it DID*. The
+  `_result` suffix was coined when there was no definition read, so it reads like "the
+  resolved automation" instead of "its runs" — and **both take the same
+  `{ automation_id }`**, so swapping them raises no error at all. The symptom is
+  asymmetric and worth knowing: asking for history when you wanted the definition
+  returns an **empty list on an automation that has never run**, from which one
+  concludes it is empty or does not exist; asking for the definition when you wanted
+  history returns a full configuration, from which one concludes it ran. Checking a
+  configuration is `get_automation`; investigating an execution is
+  `get_automation_result`.
+
+  **There is no toggle tool, deliberately.** State is a **field** (`is_active` on
+  `update_automation`), never an operation of its own. On the agent side, where
+  `ativar`/`desativar` do exist as separate ops of the native `gerenciar_automacoes`,
+  they called a **stateless toggle**: the route just inverted the stored value, so
+  `desativar` on an automation that was already inactive **turned it ON** — and answered
+  "status alternado com sucesso", which is true and says nothing. (There it was fixed by
+  sending the explicit state; here the operation simply does not exist.) A verb that
+  describes an intent about a target whose current value you never read is a blind flip;
+  sending the desired state is idempotent, and survives a repeat, a retry and two
+  concurrent calls.
 
 ### Manage agents and skills
 
@@ -1589,17 +1707,21 @@ prose around it is confident.
   is the fallback for headless/backend-to-backend use.
 - **Scopes gate each tool** (`missing scope ...` = the session lacks it). The
   discovery advertises the full set and the consent screen offers all of them:
-  `agents:chat`, `agents:read`, `agents:write`, `tools:read`, `tools:write`,
-  `skills:read`, `skills:write`, `datasources:read`, `datasources:write`, `squads:read`,
-  `squads:run`, `squads:write`, `automations:read`, `automations:run` (or `*`). Reads/chat
+  the **fifteen** of them: `agents:chat`, `agents:read`, `agents:write`, `tools:read`,
+  `tools:write`, `skills:read`, `skills:write`, `datasources:read`, `datasources:write`,
+  `squads:read`, `squads:run`, `squads:write`, `automations:read`, `automations:run`,
+  `automations:write` (or `*`). Reads/chat
   need `tools:read`/`agents:chat`; writes need `tools:write`; agent CRUD and
   `list_organization_groups`/`get_organization_topology` need
   `agents:read`/`agents:write`; skill CRUD needs `skills:read`/`skills:write`; data-source
   CRUD needs `datasources:read`/`datasources:write`; squads need their own (`squads:read`
-  to list/read, `squads:run` to fire, `squads:write` to create/edit); automations likewise.
+  to list/read, `squads:run` to fire, `squads:write` to create/edit); automations likewise
+  (`automations:read` to list and read — both the definition and the history —,
+  `automations:run` to fire, `automations:write` to create/update/delete).
   `list_agents` / `list_organizations` need no scope. If a call returns `missing scope <x>`,
   re-authorize (or mint an API key) with that scope selected — **existing tokens must
-  re-consent to gain the new `agents:*`/`skills:*`/`datasources:*` scopes**.
+  re-consent to gain the new `agents:*`/`skills:*`/`datasources:*`/`automations:write`
+  scopes**.
 - You can only use agents you own or that belong to your session's organization. One
   session = one org context (+ agents you created).
 - **Issuing an API key is deliberately UI-only — stop looking for the tool.** There is
@@ -1953,8 +2075,16 @@ So: **dispatch, then verify with the reader.**
   pages actually visited and **never justifies concluding the site lacks the
   information** — say what was seen, then widen `max_pages`/`max_depth` or sharpen the
   instructions.
-- **Squad/automation tools need an org-bound token** (`squads:read` returns nothing
-  useful for a purely personal token).
+- **Squad tools need an org-bound token — automation tools do not.** The sentence used
+  to bundle the two, and it was wrong about half of it. Squads live in an organization:
+  seven of the eight tools refuse a purely personal token outright (`squads exigem um
+  token com organização`), and `run_squad` only skips the refusal because the org travels
+  with the call. **Automations work in both contexts**, and the token's org is not a gate
+  here, it is the **scope of what you create**: with no organization on the token an
+  automation is born **personal**; with one it is born **in that organization** — which
+  requires you to be an admin of it, revalidated where it is written, not here.
+  `list_automations` likewise returns the personal ones plus, when the token carries an
+  org, the ones you can see there.
 - No path versioning yet; the contract may evolve.
 
 ## Reference
