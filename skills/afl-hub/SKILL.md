@@ -803,7 +803,8 @@ lacks it — surface verbatim):
   was rejected after N/N review cycles.
   Step and edge `id`s are **optional** — the hub generates them (and replaces
   non-uuid ones like `"s1"`, which the backend rejects); `fromStepId`/`toStepId` also
-  accept a `stepKey`. Read the returned `steps[].id` if you plan to `update_squad`.
+  accept a `stepKey`. Read the returned `steps[].id` if you plan to `update_squad`
+  (`update_squad_step` addresses a step by either one — `stepKey` or `id`).
   Step limits are enforced at the boundary with a message that names the field:
   `timeoutSeconds` 30–1800 (default 170), `maxRetries` 0–3, `retryDelaySeconds` 5–300.
   An `agent` step may now hand long work to a **background task** and wait for it, which
@@ -839,11 +840,46 @@ lacks it — surface verbatim):
   Squads created through the hub are **agent-triggerable by default** (`allow_agent_trigger`
   defaults to `true`), so the full loop is just `create_squad {… is_active:true}` →
   `run_squad`; pass `allow_agent_trigger: false` to opt out. (Squads made in the UI default to
-  the trigger off, so `run_squad` rejects until you enable it.) To edit one:
-  **`mcp__afl__get_squad`** `{ squad_id }` (`squads:read`) returns
-  the full definition, then **`mcp__afl__update_squad`** (`squads:write`) applies changes
-  — omitted fields keep their value, but `steps`/`edges` are a **full REPLACE**, so
-  resend the whole DAG.
+  the trigger off, so `run_squad` rejects until you enable it.)
+
+  **Editing one: two tools, and picking the wrong one is how instructions get erased.**
+  **`mcp__afl__update_squad_step`** (`squads:write`) is the tool for anything *inside* a
+  step, and it is what you should reach for by default. **`mcp__afl__update_squad`**
+  (`squads:write`) is for the **topology** — an edge, a step added or removed — and for
+  the squad's own metadata (`name`, `is_active`, `allow_agent_trigger`, `group_ids`,
+  `trigger_schema`, the `schedule_*` fields). Read the current state with
+  **`mcp__afl__get_squad`** `{ squad_id }` (`squads:read`) either way.
+
+  **`mcp__afl__update_squad_step`** `{ squad_id, step_key, … }` patches **one step and
+  nothing else**: `name`, `type`, `timeout_seconds`, `max_retries`, `retry_delay_seconds`,
+  `position` (`{x,y}`) and `config`. `step_key` accepts the step's **`stepKey` or its
+  `id`** — whichever you happen to have. Every other step and **every edge** are left
+  untouched, so there is nothing to resend and nothing to lose.
+  - **`config` is a SHALLOW MERGE, not a replacement.** `config: { readOnly: true }`
+    turns the gate on and leaves `instructions`, `agentId` and `failureMarker` exactly
+    where they were. This is the entire reason the tool exists — see the trap below.
+  - **`null` on a config key REMOVES that key.** It is the only way to switch
+    `failureMarker` back off: `config: { failureMarker: null }`. `""` would store an
+    *empty marker*, which is a different thing.
+  - A patch that would invalidate the DAG (changing `type` out from under the edges, for
+    instance) is **refused and nothing is written** — you never end up with half an edit.
+  - An unknown `step_key` comes back as an error that **lists the available stepKeys**,
+    so a typo costs one call instead of a `get_squad` round trip to go find the name.
+  - **`stepKey` inside the patch body is refused.** It is the step's *address*, not a
+    field you may set; accepting it would make "rename the key" and "patch the step at
+    this key" the same call, and one of the two would silently win.
+
+  **The trap `update_squad_step` closes.** `update_squad` takes `steps`/`edges` as a
+  **full REPLACE**: to change one line of one step you had to read the whole definition
+  and send it all back. And `get_squad` **projects above ~60k characters**, dropping the
+  text of `config.instructions` (see below) — so the read you were about to echo back had
+  a hole in it, and the echo **wrote empty instructions into every agent step**. The
+  defence was remembering to pass `fields: "full"`: discipline, not a control, and it
+  fails exactly on the big squads, where the projection kicks in and where losing the
+  instructions costs the most. `update_squad_step` never carries the graph, so there is
+  nothing to project and nothing to overwrite. **Reach for `update_squad` only when the
+  shape of the DAG itself changes** — and when you do, `steps`/`edges` are still a full
+  REPLACE, so resend the whole DAG.
 
   **Reading a BIG squad — `fields`, and the round-trip it must not break.** A large
   definition stopped fitting in one response (a 21-step squad came back at 75k
@@ -856,10 +892,13 @@ lacks it — surface verbatim):
   the DAG, `toolPolicy`, `turnBudget`, `modelResolution`, `groupIds` and
   `triggerSchema` all survive, and a `projection` block says so in the payload.
   **This matters because `update_squad` is a REPLACE:** resending a projected read
-  would write empty instructions into every agent step. Read with
-  `fields: "full"` whenever the next move is an update — `update_squad` also warns,
-  in `warnings.agentStepsWithoutInstructions`, when it just wrote agent steps with no
-  instructions, which is the signature of exactly that mistake.
+  would write empty instructions into every agent step. Two answers, in this order.
+  **Prefer `update_squad_step`**, which patches a step without carrying the graph at all
+  and therefore cannot be poisoned by a projection — that is the structural fix. When the
+  edit really is topological and `update_squad` is unavoidable, read with `fields: "full"`
+  first. `update_squad` also warns, in `warnings.agentStepsWithoutInstructions`, when it
+  just wrote agent steps with no instructions, which is the signature of exactly that
+  mistake — a net under the discipline, not a substitute for using the narrower tool.
 
   Still on `get_squad`: `is_active` activates a draft or deactivates a squad, and
   `allow_agent_trigger` toggles whether `run_squad` may fire it (so
