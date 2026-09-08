@@ -170,8 +170,8 @@ read failed**. See "Manage data sources" below.
 
 Two modes — choose deliberately. The dividing line is **fact vs judgement**: for a
 FACT use the deterministic tool (`google_calendar_read`, `google_gmail_read`,
-`jira_search`, `query_database` — and `mcp_call_tool` for an `mcp_server` source — raw
-JSON, no model in the middle); for a JUDGEMENT
+`jira_search`, `query_database` — and `mcp_call_tool` for an `mcp_server` source — data,
+no model in the middle); for a JUDGEMENT
 (synthesis, analysis, a decision) use the agent.
 
 - **Let the agent orchestrate** → `mcp__afl__chat_with_agent`
@@ -282,15 +282,29 @@ JSON, no model in the middle); for a JUDGEMENT
     a tool created on the MCP server afterwards does not show up here and is not callable
     until the source is edited and saved again.
   - `mcp__afl__mcp_call_tool` `{ data_source_id, tool_name, params?, organization_id? }` —
-    calls a tool of an `mcp_server` source **directly** and returns the raw result,
-    **without going through a model** (no LLM tokens spent). For MCP sources this is the
+    calls a tool of an `mcp_server` source **directly**, **without going through a model**
+    (no LLM tokens spent). For MCP sources this is the
     equivalent of what `google_calendar_read`/`jira_search` are for the native
     integrations: use it to establish **FACT** and to put a cheap gate in front of a
     collector, keeping `chat_with_agent` for **judgement**. Same org resolution as
     `list_mcp_tools` (org first with active membership, then personal) — it works on a
     personal source of the token's owner and on an organization source. Result comes in
     the hub's standard read envelope (`data` + `message`); errors from the MCP server
-    arrive verbatim. Four refusals, all of them **before** executing anything:
+    arrive verbatim.
+
+    **It is NOT the server's byte-for-byte JSON**, and both differences change the
+    arithmetic you do on top of it. `data` carries the tabulated collection
+    (`headers`/`rows`/`totalRows`), plus **`data.envelope`** — the fields the server
+    returned OUTSIDE the collection (`total`, aggregates, currency, warnings) — and
+    **`data.pagination`**, saying how many pages were consolidated and whether the read
+    was TRUNCATED. Always prefer `envelope` over summing `rows`: the list may be a slice,
+    and the sum yields a smaller, plausible-looking number. And **with no `limit`/`page`
+    in `params` the read CONSOLIDATES pages** up to the cap (20 pages / 2000 records) —
+    one execution of the server's query per page. Pin `limit` (or `page`/`offset`/
+    `pageSize`) when you want a sample: any of them switches auto-pagination off, and the
+    answer says it stopped for that reason.
+
+    Four refusals, all of them **before** executing anything:
     - **Only ENABLED tools are callable.** A name outside the catalog is REFUSED naming
       the enabled ones, and **nothing runs** — never substituted by "the closest match".
       That is the heart of the guarantee: the runtime selector only fails in an actionable
