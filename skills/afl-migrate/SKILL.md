@@ -335,9 +335,11 @@ first run, not after.**
 Two per-step settings from the source do **not** land where you expect, and both were
 copied straight across in 2026-08-20 with nothing complaining.
 
-**The step's time.** `timeoutSeconds` accepts up to **1800**, and that is the step's
-deadline — but the **inline turn** of an agent step is capped at **245 s** (the transport
-below it ends at 270 s and the model needs the difference to write its final answer). Steps
+**The step's time.** `timeoutSeconds` accepts up to **1445** on an agent step (245 s of
+inline dispatch + the 1200 s deadline of the background task — it used to say 1800, which
+no path could reach), and that is the step's deadline — but the **inline turn** of an
+agent step is capped at **245 s** (the transport below it ends at 270 s and the model
+needs the difference to write its final answer). Steps
 designed for thirty minutes got two and a half, and the tools dispatched in the last act
 came back with `durationMs: 1` and "the task deadline was reached before this tool
 finished". Four of the six failures in that run were this, and nothing but the failure

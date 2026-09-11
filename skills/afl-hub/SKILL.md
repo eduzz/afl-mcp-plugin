@@ -94,9 +94,11 @@ list does not carry the manifest — to read what an app actually authorizes, us
 **`mcp__afl__get_app_web`** (see "Reading an app's contract" below).
 
 **4. `chat_with_agent` inside a squad step ≠ `chat_with_agent` directly.**
-A squad step's `timeoutSeconds` reaches 1800, but the turn the agent answers **inline**
+A squad step's `timeoutSeconds` reaches 1445, but the turn the agent answers **inline**
 is cut at **245s** — the HTTP leg under it stops at 270s and the model needs the
-difference to write its final answer. The same prompt that finishes in a direct call —
+difference to write its final answer. (1445 = 245s of inline dispatch + the 1200s
+deadline of the background task; the ceiling used to say 1800, a number no path could
+reach.) The same prompt that finishes in a direct call —
 where your client can move it to background — blows the deadline inside a step, and the
 tools dispatched in the last act come back with `durationMs: 1` and "the task deadline
 was reached before this tool finished". Work that does not fit in 245s must go to
@@ -165,6 +167,32 @@ by Gmail, Calendar and Drive and so say nothing on their own: `gmail | drive | c
 **refused**, naming the field — it used to be accepted, and the source then showed
 `isActive: true` in the listing, connected to the agent without complaint, and **every
 read failed**. See "Manage data sources" below.
+
+A Google source that names **one document** must also point at a **file**: `config.fileId`
+(or `googleFileId`/`spreadsheetId`/`documentId`/`formId`, all accepted). This applies to
+`google_sheet`, `google_doc`, `google_forms`, and to
+`google_drive_file` when its subtype is a document (`sheets | docs | slides | forms`) —
+never to a calendar or mailbox, which point at no file. Without the id
+`create_data_source` is **refused**, naming the field; it used to be accepted, and the
+source then listed fine, showed the file when queried and connected to the agent, while
+every analysis answered *"the source EXISTS, but has no file selected in its
+configuration"*. The same source, for the same file, created through the UI worked — the
+UI writes the id where the reader looks and the hub only wrote it into `config`.
+
+The id is now promoted to that place from any of the spellings above, so **the hub and
+the UI produce equivalent sources**. `update_data_source` promotes it too, which repairs
+a source that was created before this — send its `config` again (or just the `fileId`)
+and the link is written. `google_drive_folder` needs no id: absent means the **root** of
+the Drive, which is a valid source.
+
+**Public-link types point by URL, not by id.** `google_sheet_public` and
+`google_doc_public` are configured with the sharing link — `config.publicUrl` (aliases:
+`googleFileUrl`, `google_file_url`, `fileUrl`, `url`) — and the reader consumes that URL
+directly. They also require no connected integration, which is the whole point of them.
+Requiring a file id there was a regression: creation became **impossible**, and the
+refusal told the caller to list files with `google_drive_read`, which cannot be done
+without an account. The guard still exists for these types — a public source with no URL
+is just as inert — it simply asks for the URL instead of the id.
 
 ## Which tool to use
 
@@ -839,14 +867,17 @@ lacks it — surface verbatim):
   accept a `stepKey`. Read the returned `steps[].id` if you plan to `update_squad`
   (`update_squad_step` addresses a step by either one — `stepKey` or `id`).
   Step limits are enforced at the boundary with a message that names the field:
-  `timeoutSeconds` 30–1800 (default 170), `maxRetries` 0–3, `retryDelaySeconds` 5–300.
+  `timeoutSeconds` 30–1800 (default 170; **1445** on an `agent` step), `maxRetries` 0–3,
+  `retryDelaySeconds` 5–300.
   An `agent` step may now hand long work to a **background task** and wait for it, which
-  is why the ceiling is 30 min — but the turn the agent answers **inline** is capped at
+  is why its ceiling is 1445s — 245s of inline dispatch plus the 1200s deadline of the
+  background task, the most the path can actually spend — but the turn the agent answers
+  **inline** is capped at
   **245s** (270s of HTTP minus the margin the model needs to write the final answer). So:
   work that fits inline must fit in 245s; work that doesn't goes to background, and only
   then does a `timeoutSeconds` above 245 buy you anything. Above it the tools
   create/update **warn** instead of refusing (refusing would kill the background path and
-  break every squad already carrying 1800), and `get_squad` attaches the resolved
+  break every squad already carrying a long deadline), and `get_squad` attaches the resolved
   **`turnBudget`** to each agent step so the two numbers never have to be reconciled by
   hand.
   **A step that declares its own failure in prose still closes `completed`.** Six agent
