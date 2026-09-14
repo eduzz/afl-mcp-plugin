@@ -180,10 +180,14 @@ configuration"*. The same source, for the same file, created through the UI work
 UI writes the id where the reader looks and the hub only wrote it into `config`.
 
 The id is now promoted to that place from any of the spellings above, so **the hub and
-the UI produce equivalent sources**. `update_data_source` promotes it too, which repairs
-a source that was created before this — send its `config` again (or just the `fileId`)
-and the link is written. `google_drive_folder` needs no id: absent means the **root** of
-the Drive, which is a valid source.
+the UI produce equivalent sources**. `update_data_source` promotes it on **every call**,
+not only when you resend `config` — so repairing a source created before this is just
+`update_data_source { data_source_id }`; sending `config` stays valid when you also want
+to change the file or the type. The one case it cannot repair by itself is an **ambiguous
+type** (`google_workspace`, which serves more than one service): with no discriminator the
+resolver returns no subtype and the alignment is a no-op, so there you must send the
+discriminator. `google_drive_folder` needs no id: absent means the **root** of the Drive,
+which is a valid source.
 
 **Public-link types point by URL, not by id.** `google_sheet_public` and
 `google_doc_public` are configured with the sharing link — `config.publicUrl` (aliases:
@@ -243,7 +247,18 @@ no model in the middle); for a JUDGEMENT
     legitimately differ. When more than one sprint is active, `data.warning` says so:
     **ask the user which one**, don't pick.
   - `mcp__afl__hubspot_search` `{ agentId, objectType, query }` — objectType is
-    `contacts | companies | deals | tickets`.
+    `contacts | companies | deals | tickets`, **or a HubSpot custom object selected on the
+    agent's HubSpot source** (by `objectTypeId` `2-<n>`, internal name, qualified name
+    `p<portal>_<name>` or label). The same holds for `object_type` (and
+    `from_type`/`to_type`/`associations_to_type`) on every `hubspot_crm_*` tool. Only the
+    custom objects selected on the source are reachable: one that exists in the portal but
+    is not on the source is **refused** (`error_code: hubspot_object_type_not_allowed`,
+    nothing is called) — don't retry with another object, ask the source owner to add it.
+    On custom objects, property names are checked against the object schema before any
+    write/search (an unknown or read-only name is refused with the list of the real ones).
+    A `403` for missing custom-object scopes comes back as `outcome: "not_applicable"`
+    (no `needs_reconnect`): reconnecting does not help until the AFL HubSpot app gets the
+    scope. Delete keeps the same `confirm_action` + "Permitir exclusão" gate.
   - **Per-provider reads, named after the native tool** (`tools:read`): `jira_ler_issue`,
     `jira_ler_comentarios`, `jira_exportar_anexo`, `hubspot_crm_activities`,
     `hubspot_crm_files`, `notion_pages_export`, `google_gmail_read`,
@@ -1134,8 +1149,17 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   org). Other optionals: `description`, `prompt` (system instructions), **`agent_type`**
   (the subtype — see below), `level` (personal
   only), `temperature` (0–2), `category`/`target_audience` (personal only),
-  `avatar_icon`, `avatar_color`, and `group_ids` (org only — see below).
+  `avatar_icon`, `avatar_color`, `tool_use_enabled`, and `group_ids` (org only — see below).
   **The model is not one of them** — see the note below.
+  **`tool_use_enabled`** (boolean, default `true`; personal **and** org, on `create_agent`
+  and `update_agent`) declares whether the agent uses tools at all. Set it to `false` only
+  for an agent that just **reports** what it is given — a transcriber, a translator, a
+  summarizer of the text it receives: it gets **no tool catalog in any channel** and no
+  "announced action not executed" nudge. Do not switch it off on an agent that has to look
+  anything up, search a knowledge base or act — it would answer from the prompt alone.
+  Omitted on `update_agent` = current value kept; it is a real boolean (the string
+  `"false"` is rejected). The reply carries the effective `toolUseEnabled`; if the write did
+  not confirm it, it comes under `requestedNotConfirmed` instead — treat that as *not set*.
   **`agent_type` is the one model lever a tool has.** It is the same value `get_agent`
   returns as `agentType`, and it is the matrix's subtype row: precedence is *agent's own
   model → **subtype** → functionality → default*. Omitted, an agent is born `assistant`,
