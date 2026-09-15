@@ -1160,6 +1160,16 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   Omitted on `update_agent` = current value kept; it is a real boolean (the string
   `"false"` is rejected). The reply carries the effective `toolUseEnabled`; if the write did
   not confirm it, it comes under `requestedNotConfirmed` instead — treat that as *not set*.
+  **`auto_approve_whatsapp_messages`** (boolean, **personal agents only**, `update_agent`
+  only) is the per-agent half of the WhatsApp **dual opt-in**: an agent sends WhatsApp
+  (text or audio) without manual approval only when this flag **and** the user's master
+  switch are both on. The master switch is **not writable by any tool** — the person turns
+  it on in the AFL UI (Integrations → WhatsApp → Connection tab → "Automatic sending by
+  agents"). So setting this alone never unblocks a send: if the agent still answers
+  `APPROVAL_REQUIRED`, tell the user to turn the master switch on, don't retry. On an
+  **org** agent the field is **refused** (`organization_agents` has no such column, and
+  org agents cannot send without approval today). `get_agent` returns it as
+  `autoApproveWhatsappMessages`; the reply echoes it under `updated`.
   **`agent_type` is the one model lever a tool has.** It is the same value `get_agent`
   returns as `agentType`, and it is the matrix's subtype row: precedence is *agent's own
   model → **subtype** → functionality → default*. Omitted, an agent is born `assistant`,
