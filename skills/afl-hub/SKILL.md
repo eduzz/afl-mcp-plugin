@@ -916,10 +916,20 @@ lacks it — surface verbatim):
   `approval` step is not a substitute — it collects a **decision**, not a typed **value**.
   A squad is born as a **draft** (`is_active=false`) for review in the builder unless
   you pass `is_active: true`.
-  Squads created through the hub are **agent-triggerable by default** (`allow_agent_trigger`
-  defaults to `true`), so the full loop is just `create_squad {… is_active:true}` →
-  `run_squad`; pass `allow_agent_trigger: false` to opt out. (Squads made in the UI default to
-  the trigger off, so `run_squad` rejects until you enable it.)
+  **Agent triggering is an EXECUTION permission, not an edit (AV-2229).** `allow_agent_trigger`
+  is the switch that lets `run_squad` fire a squad. Turning it **on** — including creating a
+  squad already on — needs **`squads:run`** on top of `squads:write`. Without it the write comes
+  back **`blocked`** ("Ligar o disparo por agente exige permissão de EXECUTAR squads…"), nothing
+  is saved and the squad stays not agent-triggerable. So the default depends on the key:
+  with `squads:run`, `create_squad` defaults `allow_agent_trigger` to `true` and the full loop
+  is just `create_squad {… is_active:true}` → `run_squad`; without it the squad is born with
+  the trigger **off** and the response carries a warning saying so. What does NOT need
+  `squads:run`: re-sending the value the squad already has (the server compares with what is
+  saved, not with your payload), and turning it **off**. The same rule closes the side door
+  through a step: pointing a `type:'squad'` step at a squad that is **not** agent-triggerable
+  (`update_squad` or `update_squad_step`) also needs `squads:run` — that step would fire it
+  from inside the run. (Squads made in the UI default to the trigger off, so `run_squad`
+  rejects until someone who can run squads enables it.)
 
   **Editing one: two tools, and picking the wrong one is how instructions get erased.**
   **`mcp__afl__update_squad_step`** (`squads:write`) is the tool for anything *inside* a
@@ -981,7 +991,8 @@ lacks it — surface verbatim):
 
   Still on `get_squad`: `is_active` activates a draft or deactivates a squad, and
   `allow_agent_trigger` toggles whether `run_squad` may fire it (so
-  `update_squad { squad_id, allow_agent_trigger: true }` unblocks an existing squad). Squad
+  `update_squad { squad_id, allow_agent_trigger: true }` unblocks an existing squad — **only with
+  `squads:run`**; a `squads:write`-only key gets `blocked` and the trigger stays off). Squad
   tools require a token bound to an organization.
   **Scoping a squad to groups — `group_ids`, and the field the hub could read but not
   write.** `get_squad` always returned `groupIds` (plus a compat `groupId`), and no tool
@@ -1032,6 +1043,10 @@ lacks it — surface verbatim):
   `scheduleMonths`).
 - **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
   automation (fire-and-forget) → `{ queued, correlationId }`.
+  An error saying access **could not be confirmed** ("Não foi possível confirmar seu
+  acesso…") means the server could not evaluate membership/group scope right now and
+  refused: **nothing ran** and no execution was recorded. It is not "no permission" —
+  retry in a moment; never report the automation as started.
   `mcp__afl__list_automations` (`automations:read`) lists the visible ones.
 
   **The hub used to be a remote control, not an editor.** Those two plus
@@ -1160,16 +1175,19 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   Omitted on `update_agent` = current value kept; it is a real boolean (the string
   `"false"` is rejected). The reply carries the effective `toolUseEnabled`; if the write did
   not confirm it, it comes under `requestedNotConfirmed` instead — treat that as *not set*.
-  **`auto_approve_whatsapp_messages`** (boolean, **personal agents only**, `update_agent`
+  **`auto_approve_whatsapp_messages`** (boolean, personal **and** org agents, `update_agent`
   only) is the per-agent half of the WhatsApp **dual opt-in**: an agent sends WhatsApp
-  (text or audio) without manual approval only when this flag **and** the user's master
-  switch are both on. The master switch is **not writable by any tool** — the person turns
-  it on in the AFL UI (Integrations → WhatsApp → Connection tab → "Automatic sending by
-  agents"). So setting this alone never unblocks a send: if the agent still answers
-  `APPROVAL_REQUIRED`, tell the user to turn the master switch on, don't retry. On an
-  **org** agent the field is **refused** (`organization_agents` has no such column, and
-  org agents cannot send without approval today). `get_agent` returns it as
-  `autoApproveWhatsappMessages`; the reply echoes it under `updated`.
+  (text or audio) without manual approval only when this flag **and** a master switch are
+  both on. Which master switch depends on the agent: on a **personal** agent, the user's
+  own; on an **org** agent, the master switch of **whoever paired the WhatsApp number used
+  for the send**, and only while that person is an active member of the org (not the
+  switch of whoever is chatting). On an org agent the flag itself needs an active
+  admin/owner, like the rest of the update. The master switch is **not writable by any
+  tool** — it is turned on in the AFL UI (WhatsApp → Connection tab → "Automatic sending by
+  agents", in the personal integrations or the org's). So setting this alone never unblocks
+  a send: if the agent still answers `APPROVAL_REQUIRED`, tell the user which master switch
+  is missing (theirs, or the number's pairer's for an org agent), don't retry. `get_agent`
+  returns it as `autoApproveWhatsappMessages`; the reply echoes it under `updated`.
   **`agent_type` is the one model lever a tool has.** It is the same value `get_agent`
   returns as `agentType`, and it is the matrix's subtype row: precedence is *agent's own
   model → **subtype** → functionality → default*. Omitted, an agent is born `assistant`,
