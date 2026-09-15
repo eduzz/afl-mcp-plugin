@@ -930,6 +930,21 @@ lacks it — surface verbatim):
   (`update_squad` or `update_squad_step`) also needs `squads:run` — that step would fire it
   from inside the run. (Squads made in the UI default to the trigger off, so `run_squad`
   rejects until someone who can run squads enables it.)
+  **Scheduling is ALSO an execution permission.** The cron fires a squad on its own, so a
+  `squads:write`-only key must not be able to arm it. Each of these needs **`squads:run`**
+  and otherwise comes back **`blocked`** with nothing saved (403
+  `SCHEDULE_REQUIRES_RUN_PERMISSION`, reasons `schedule_requires_run` /
+  `schedule_cadence_requires_run` / `reactivation_requires_run`): turning the schedule
+  **on** (`create_squad` or `update_squad` with `schedule_enabled: true` or a
+  `schedule_frequency` — even on a draft); changing **when** an enabled schedule runs
+  (`schedule_frequency`, `custom_schedule_days`, `custom_schedule_time`,
+  `schedule_day_of_month`, `schedule_months` — only the fields that frequency actually reads
+  count, and day order does not); and **re-activating** (`is_active: true`) a squad whose
+  schedule or `allow_agent_trigger` is on (when only the agent trigger is on, the code is
+  `AGENT_TRIGGER_REQUIRES_RUN_PERMISSION`). The refusal is decided before anything is written,
+  so an `update_squad` that also renames the squad does not half-apply. What does NOT need
+  `squads:run`: re-sending the saved values, turning the schedule **off**, deactivating, or
+  changing the cadence of a schedule that is (and stays) off.
 
   **Editing one: two tools, and picking the wrong one is how instructions get erased.**
   **`mcp__afl__update_squad_step`** (`squads:write`) is the tool for anything *inside* a
@@ -1048,6 +1063,14 @@ lacks it — surface verbatim):
   refused: **nothing ran** and no execution was recorded. It is not "no permission" —
   retry in a moment; never report the automation as started.
   `mcp__afl__list_automations` (`automations:read`) lists the visible ones.
+  **Reads of ONE resource can fail the same way** — `get_squad`, `get_squad_run`,
+  `list_squad_runs`, `get_automation`, `get_automation_result`: "Não foi possível
+  confirmar seu acesso a este recurso agora, então nada foi lido…" (503
+  `RESOURCE_ACCESS_EVALUATION_UNAVAILABLE`). The server could not evaluate membership/group
+  scope, so it refused to read — for everyone, author and admin included. **Nothing was
+  read.** It does **not** mean the squad/run/automation is missing, nor that you lack
+  permission: retry, and never tell the user it doesn't exist. (Being outside the group is
+  still a plain not-found.)
 
   **The hub used to be a remote control, not an editor.** Those two plus
   `get_automation_result` were the whole surface: you could see that an automation
@@ -1088,8 +1111,17 @@ lacks it — surface verbatim):
   `personal_agent_id`, `analysis_type`, `analysis_custom_prompt`, `conditions_logic`,
   `conditions[]`, `actions[]`, `is_active`, `monthly_cost_limit_brl`. Three are
   **required on create only** (`name`, `frequency`, `data_source_id`) and `is_active`
-  **changes meaning** between the two (default `true` on create; "leave it alone" when
-  omitted on update) — which is why the two schemas are not one object.
+  **changes meaning** between the two (on create the default follows the key — see below;
+  "leave it alone" when omitted on update) — which is why the two schemas are not one object.
+  **Active = scheduled, and activating is an EXECUTION permission.** Every automation has a
+  `frequency`, and the scheduler runs every automation that is active. So with only
+  `automations:write` (no `automations:run`): `create_automation` without `is_active` is born
+  **inactive** (with a `warnings` entry saying so); `is_active: true` on create, activating an
+  inactive automation with `update_automation`, and changing **when** an active one runs
+  (`frequency`, `custom_schedule_days`/`custom_schedule_time`) come back **`blocked`** with
+  nothing saved (403 `AUTOMATION_SCHEDULE_REQUIRES_RUN_PERMISSION`). With `automations:run`,
+  `create_automation` defaults to active, as before. Re-sending the saved state and
+  deactivating never need it.
   `conditions`/`actions` are **REPLACE**: the array you send replaces the previous one
   whole. `monthly_cost_limit_brl` is the one field where **`null` is a VALUE** ("remove
   the cap"), not absence — omitting it preserves what is stored. **`data_source_ids` works
