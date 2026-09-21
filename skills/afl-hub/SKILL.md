@@ -239,7 +239,14 @@ no model in the middle); for a JUDGEMENT
     sprints closed in June" is answered from it, never from `endDate` or by sampling
     issues. To get a period's sprints without listing cards, run `execute_tool` →
     `jira_buscar_issues` with `aggregate: { op: "group_by", group_by: "sprint" }` over a
-    `resolutiondate` JQL. The envelope's `projects` reflects what the
+    `resolutiondate` JQL. Each issue also carries `storyPoints` (a number, or `null` =
+    not estimated — never 0) and `envolvidos` when the instance has the fields; with
+    several story-point fields on the instance, the value is the first one FILLED on
+    that issue (`data.camposAgeis.storyPointsCampos` lists them, in precedence order —
+    AV-2320). Effort is summed server-side: `aggregate: { op: "sum", column:
+    "storyPoints", group_by: "assignee" }` — unestimated items stay out of the sum, and
+    an instance without the field is refused with the reason, never answered with 0.
+    The envelope's `projects` reflects what the
     QUERY asked for; `sourceProjects` is the source's own scope. Responses default to
     `verbosity: "compact"` — the `data` envelope only. Pass `verbosity: "full"` to
     also get the same content rendered as markdown (~2× the tokens; you rarely need
