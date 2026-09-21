@@ -1097,10 +1097,17 @@ lacks it — surface verbatim):
   (`realtime` = every 10min · `every_15_minutes` · `hourly` = minute 0 · `every_6_hours` ·
   `daily` = 09:00 · `weekly` = Monday 09:00 · `monthly` · `custom`), plus
   `custom_schedule_days`
-  (`0`=Sunday … `6`=Saturday) and `custom_schedule_time` (`HH:MM`, server timezone) —
-  the last two are **required** with `custom` and ignored otherwise, and
-  `schedule_day_of_month` (`1`–`31`, **required** with `monthly` together with
+  (`0`=Sunday … `6`=Saturday) and `custom_schedule_time` (`HH:MM` **in the squad's
+  `schedule_timezone`**) — the last two are **required** with `custom` and ignored otherwise,
+  and `schedule_day_of_month` (`1`–`31`, **required** with `monthly` together with
   `custom_schedule_time`).
+  **`schedule_timezone`** (IANA, e.g. `America/Sao_Paulo`, `Europe/Lisbon`; default
+  `America/Sao_Paulo`) is the clock the schedule runs on: `custom_schedule_time` is read in
+  it, and `daily`/`weekly` fire at **09:00 local** in it. It is **not** the server clock —
+  never compensate for UTC by hand (a `12:00` meant as "09:00 BRT" is a bug, not a
+  workaround). Omitting it on `update_squad` keeps the stored timezone; an unknown IANA id is
+  rejected by the hub with the valid examples; on interval cadences (`hourly`, …) it is stored
+  with a warning because intervals are the same in every timezone.
   **Quarterly / four-monthly cadences are `monthly` + `schedule_months`** — an array of
   months `1`–`12` (`[3,6,9,12]` = quarterly committee, `[12,4,8]` = four-monthly strategic
   planning cycle, `[1,7]` = biannual). Omitting it means every month, so existing monthly
