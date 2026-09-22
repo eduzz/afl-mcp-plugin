@@ -230,8 +230,14 @@ no model in the middle); for a JUDGEMENT
   - `mcp__afl__jira_search` `{ agentId, query, project?, maxRows?, verbosity? }` —
     `query` is **JQL** (e.g. `ORDER BY created DESC`, `project = AV AND status = "In
     Progress"`). Never pass natural language as JQL. Each issue carries `key`, `id`
-    (the numeric one, needed by custom fields that take a reference) and, when the
-    instance has the field, its `sprint`. The envelope's `projects` reflects what the
+    (the numeric one, needed by custom fields that take a reference), `resolved` (the
+    `resolutiondate`, `null` while open) and, when the instance has the field, its
+    `sprint` — `{ id, name, state, boardId, startDate?, endDate?, completeDate? }`.
+    `completeDate` is the REAL close date (absent on an active sprint), so "which
+    sprints closed in June" is answered from it, never from `endDate` or by sampling
+    issues. To get a period's sprints without listing cards, run `execute_tool` →
+    `jira_buscar_issues` with `aggregate: { op: "group_by", group_by: "sprint" }` over a
+    `resolutiondate` JQL. The envelope's `projects` reflects what the
     QUERY asked for; `sourceProjects` is the source's own scope. Responses default to
     `verbosity: "compact"` — the `data` envelope only. Pass `verbosity: "full"` to
     also get the same content rendered as markdown (~2× the tokens; you rarely need
@@ -735,7 +741,15 @@ lacks it — surface verbatim):
   step made **three** calls, **all `ok`** in 37–45 ms, collected nothing, and reported
   "the analyses are processing, I will return with the consolidated data" — a background
   that does not exist. `ok` is a statement about the call, not about the data: read the
-  tool *results*, and treat a suspiciously fast `ok` with an empty payload as a failure. Same rule as `_meta.toolCalls` in
+  tool *results*, and treat a suspiciously fast `ok` with an empty payload as a failure.
+  **And the work may have happened in another turn:** a step that dispatched to a
+  **background task** did not run those tools in this turn, so it carries
+  **`backgroundTaskId`** (plus **`backgroundTaskError`** when that task failed) and
+  **`toolCallsScope`** — `dispatch_turn` (the count covers the dispatch turn only) or
+  `dispatch_turn_not_counted` (there is no count at all). There, `toolCallsCount: 0`
+  or a missing count is NOT proof that nothing was done: fetch the evidence with
+  **`mcp__afl__get_task_result`** `{ task_id: backgroundTaskId }`. A missing
+  `backgroundTaskId` means NOT VERIFIED, never "there was no task". Same rule as `_meta.toolCalls` in
   `chat_with_agent`: cross the prose with the record. A step's `toolCalls` carry
   **`truncated`/`originalChars`/`deliveredChars`** with the same meaning as above —
   read them before concluding anything about *why* a step returned what it returned,
@@ -1056,6 +1070,26 @@ lacks it — surface verbatim):
   creator. `list_squads` reports each squad's schedule state (`scheduleEnabled`,
   `scheduleFrequency`, `customScheduleDays`, `customScheduleTime`, `scheduleDayOfMonth`,
   `scheduleMonths`).
+  **Scheduled round by target list — read-only through the hub.** `get_squad` returns
+  `trigger.scheduleTargets` (`[{ message }]`, up to 50): on every scheduled fire, **each
+  target becomes one run** carrying its own message (that is how "run August's report for
+  the 22 teams" goes out by itself on the 11th, without one squad per team). No list = one
+  run with `Execução agendada (<frequency>)`, as always. `scheduleLastRound` (top level of
+  `get_squad`) is what the **last CRON round** produced: `{ at, targets, started, queued,
+  failed: [{ message, reason, code, params? }], origin }` — `failed` is the only memory of a target that
+  did **not** become a run (refused by quota, queue or trigger contract), so it is where "why did
+  team X get no report?" is answered. `code` is the closed vocabulary of causes
+  (`target_without_message`, `above_target_cap`, `guard_rail`, `refused_by_rule`,
+  `internal_error`); `reason` is the pt-BR sentence. `lastOnDemandRound` (same shape, same
+  level) is the last round a **person** asked for in the UI (`POST /squads/:id/round`,
+  `origin: 'on_demand'`). Two memories because neither may erase the other: the round someone
+  fires to *check* the configuration would otherwise wipe the evidence of the scheduled round that went
+  out half-done. Missing `origin` = a record written before the distinction, and it is the cron's. `create_squad`/`update_squad` do **not** accept the list (it is
+  edited in the UI, Schedule tab, or via `PUT /api/.../squads/:id` with
+  `trigger.scheduleTargets`); an `update_squad` never clears it — a partial patch leaves
+  untouched what it does not send. A squad with a required `triggerSchema` **cannot** be
+  scheduled (with or without a list): a scheduled fire only carries the message, and the API
+  refuses at configuration time.
 - **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
   automation (fire-and-forget) → `{ queued, correlationId }`.
   An error saying access **could not be confirmed** ("Não foi possível confirmar seu
