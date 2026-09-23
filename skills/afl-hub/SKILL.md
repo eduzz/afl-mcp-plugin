@@ -1015,6 +1015,30 @@ lacks it — surface verbatim):
   fingerprint and rewrites nothing when it is identical, so an unchanged save keeps both the
   version and the edge ids. If you see the version move, the definition really did change.
 
+  **Quoting another step's output — `{{outputs.<stepKey>}}`, and where it actually works.**
+  The grammar is `{{outputs.<stepKey>}}` (one step), `{{outputs}}` (all parents) and
+  `{{trigger}}`. Until 2026-09-23 **only `action.config.messageContent` interpolated**: the
+  same text in `agent.config.instructions` and in `approval.config.message` reached the model
+  and the approver **literally**, as the characters `{{outputs.kpis}}`. All three interpolate
+  now, so a step can cite one specific parent instead of receiving all of them — with
+  `includeParentOutputs: false`, that is the way to do it.
+
+  Two rules worth knowing before you write one. **It resolves against PARENTS** (plus what
+  passes through an approval gate), not against any ancestor: in `a → b → c`, a
+  `{{outputs.a}}` inside `c` resolves EMPTY. Since 2026-09-23 the save **warns about exactly
+  that** (`step_references_unreachable_output`, with `relation: "ancestor_out_of_reach"` when
+  the step you cited does run earlier and simply does not reach you) — it used to stay silent,
+  because its rule was ancestry while the runtime's was parenthood, so you got silence on save
+  and a hole at run time. The fix is an edge from the cited step to this one; routing the path
+  through an approval gate also works, because a gate passes its parents' outputs through. And
+  a `stepKey` that **does not exist** in the definition now comes back as a
+  `warnings` entry on save and **fails the step at run time** — a terminal error, no retry,
+  naming the placeholder and listing the valid keys. It used to resolve to an empty string in
+  silence, which is how a report could go out with a hole in it and nobody knew. Quoted
+  content is clipped at 24.000 characters in an agent step (and the fully-quoted parent then
+  drops out of the parents block, so the prompt does not grow) and at 2.000 in a gate message;
+  an action is **not** clipped, because there the text IS the payload being delivered.
+
   **Reading a BIG squad — `fields`, and the round-trip it must not break.** A large
   definition stopped fitting in one response (a 21-step squad came back at 75k
   characters and the call failed on size), so `get_squad` gained `fields`
