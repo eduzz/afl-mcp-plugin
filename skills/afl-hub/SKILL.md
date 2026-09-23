@@ -999,6 +999,22 @@ lacks it — surface verbatim):
   shape of the DAG itself changes** — and when you do, `steps`/`edges` are still a full
   REPLACE, so resend the whole DAG.
 
+  **`edges` WITHOUT `steps` is REFUSED — it never worked.** Until 2026-09-23 the hub
+  accepted it, dropped the edges on the floor **inside the tool** (the workflow service was
+  never even called) and answered success, so the topology silently stayed as it was. The
+  refusal names the real contract: the edges reference the step ids of the *same* payload
+  and the definition is written in one shot, so a topology change sends `steps` AND `edges`
+  together. Changing something *inside* a step is `update_squad_step`, which touches no
+  edge at all.
+
+  Related, and easy to misread as that bug: `definitionVersion` going up and the **edge ids
+  changing** on a call you did not expect to alter anything. That is NOT the dropped-edges
+  path — it came from any save that resends the whole definition unchanged (the builder's
+  autosave, and `update_squad_step` itself, which merges one step and hands the whole graph
+  back). Since 2026-09-23 the repository compares the stored definition by a stable
+  fingerprint and rewrites nothing when it is identical, so an unchanged save keeps both the
+  version and the edge ids. If you see the version move, the definition really did change.
+
   **Reading a BIG squad — `fields`, and the round-trip it must not break.** A large
   definition stopped fitting in one response (a 21-step squad came back at 75k
   characters and the call failed on size), so `get_squad` gained `fields`
@@ -1379,6 +1395,30 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
       zero ceiling. A configured ceiling that diverges from the enforced one shows up in
       `warnings`. If the budget read itself fails, `costCenters.unavailable` says so and the
       graph still comes back whole — never "it does not exist".
+    - **`costCenters` answers "what can REFUSE a run of mine", not "what are the org's cost
+      centers"** — and since 2026-09-23 it covers all **seven** levels that can refuse, each
+      in its own block: `visible[]` (`cost_center`), `personalLimits.entries[]` (`plan` and
+      `sponsorship`, plus the `user` ceiling), `organizationLimit.entry` (`organization` —
+      the subscription/plan ceiling, which is a level ABOVE the cost centers and used to be
+      invisible here), `automationLimits` (`automation`, one entry per automation that
+      *declares* a ceiling) and `platformKeyLimit` (`api_key`). Reading only `visible[]` and
+      concluding "nothing blocks" is the mistake this block was rebuilt to prevent: a refusal
+      marked `quota_scope=organization` was once diagnosed against the fullest cost center,
+      which was not the one denying.
+    - **`blockingAny` vs `blockingAmongRead`.** `blockingAny` is `true` when something
+      refuses, `false` only when nothing refuses **and every deciding level was read**, and
+      `null` when the answer is unknowable — a block missing, a read that failed, or a
+      declared partial cut (`automationLimits.partial`, which happens for a plain member,
+      because automation visibility is group-scoped and that rule lives in the b2b service).
+      `blockingAmongRead` is the weaker claim that is always safe: nothing refuses among the
+      levels actually read. **Never turn `null` into "nothing blocks"** — repeat the call
+      only when the cause is a failed read; for a partial cut, repeating changes nothing.
+    - **`platformKeyLimit` is a verdict without numbers.** It ships `enforced`, `blocking`
+      and `exhausted[]`, and deliberately **omits `limits`/`usage`** (`numbersWithheld:
+      true`, stated in `warnings`): that ceiling is the platform's own invoice and its
+      counter aggregates every customer's usage, so the figures are not yours to see. The
+      verdict is still complete — and `manageAt` is `null` because there is no screen and no
+      upgrade: if this one is blocking, nothing you do in the product changes it.
 - **Put an org agent in a group — and create the group if it isn't there.**
   `mcp__afl__list_organization_groups` `{ organization_id? }` (scope `agents:read`) lists
   the org's groups (`{ id, name, description, groupType, hierarchyLevel }`); omit the id to
