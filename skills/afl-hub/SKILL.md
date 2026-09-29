@@ -737,7 +737,7 @@ lacks it — surface verbatim):
 - **`mcp__afl__execute_in_background`** (`tools:write`) → returns a `task_id`; fetch it
   later with **`mcp__afl__get_task_result`** `{ task_id }` (`tools:read`). Use for
   long/multi-step work so you don't block.
-- **Squads** — `mcp__afl__run_squad` (scope `squads:run`) fires an org squad
+- **Squads** — `mcp__afl__run_squad` (scope `squads:run`) fires a squad
   asynchronously → returns a `run_id`; poll **`mcp__afl__get_squad_run`**
   `{ squad_id, run_id }` (scope `squads:read`) — the poll returns a **status projection** by
   default (run status + per step: status, timings, duration, error, and
@@ -799,7 +799,7 @@ lacks it — surface verbatim):
   `partial`, `failed`, `cancelled`) and/or `start_date`/`end_date` (`YYYY-MM-DD`, over the run's
   creation date; `end_date` is **inclusive** — the whole day counts).
   `mcp__afl__list_squads` (`squads:read`) lists
-  the org squads you can trigger — pass `include_all: true` to also see **drafts**,
+  the squads you can trigger **in the token's context** (see "Squad context" below) — pass `include_all: true` to also see **drafts**,
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
   (scope `squads:write`) creates a squad (DAG of steps): pass `name`, `steps[]` and
   `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`).
@@ -809,13 +809,14 @@ lacks it — surface verbatim):
   `automation` → `{ automationId }` ·
   **`approval`** (human gate, pauses the run) → `{ approverUserIds: [...] }` **or**
   `{ approverGroupRole: "admin" | "member" }` — **one of them is mandatory**
-  (optional: `message`, `expiresInHours`, default 168) ·
+  (optional: `message`, `expiresInHours`, default 168; in a **personal** squad omit both —
+  the approver is you, declared by the hub) ·
   `action` → `{ actionType, messageContent?, actionConfig }` with `actionType` in
   `send_inbox_notification` · `webhook` (needs `actionConfig.webhookUrl`) ·
   `send_whatsapp` (needs `actionConfig.whatsappRecipient`) · `execute_integration`
   (needs `actionConfig.integrationId` + `integrationActionName`) · `generate_report`
   (needs top-level `config.reportAgentId` + `actionConfig.reportType`) ·
-  `squad` → `{ squadId, waitForCompletion? }`, chaining **another** org squad.
+  `squad` → `{ squadId, waitForCompletion? }`, chaining **another** squad of the same context.
   **`approval` is a step `type`, never an `actionType`** — that confusion (plus an
   `approval` step with no approver) used to come back as a bodyless
   `HTTP 400: "Definição do squad inválida"`, which reads like "approval isn't
@@ -1079,7 +1080,8 @@ lacks it — surface verbatim):
   write.** `get_squad` always returned `groupIds` (plus a compat `groupId`), and no tool
   ever wrote it: you could create the group, create the agent, put the agent in the group —
   and then stop at the squad and open the UI. Both `create_squad` and `update_squad` now
-  take **`group_ids`** (org **admin/owner**), resolved from `list_organization_groups` or
+  take **`group_ids`** (org **admin/owner**; **organization only** — a personal squad has
+  no groups, and `group_ids` with a token that has no org is refused before any call), resolved from `list_organization_groups` or
   freshly created with `create_organization_group`.
   It is **REPLACE, not append**, exactly like an agent's `group_ids`: in `create_squad`
   omitting it leaves the squad **org-wide** (everyone in the org); in `update_squad`
@@ -1152,8 +1154,8 @@ lacks it — surface verbatim):
 - **Delete a squad** — **`mcp__afl__delete_squad`** `{ squad_id, confirm: true }`
   (`squads:write`). `confirm: true` is **required** (same rule as `delete_automation`):
   without it the call is refused and **nothing is sent**. Who may: the owner of a personal
-  squad, or an org admin / admin of the group that scopes it; the scope comes from the
-  SQUAD's record — a token bound to an org only reaches that org's squads. A squad with a
+  squad, or an org admin / admin of the group that scopes it. A token bound to an org only
+  reaches that org's squads; a token with no org only reaches **your personal** squads. A squad with a
   run in progress is refused (`409`, "cancele-as antes") — cancel the run first. Removes
   the definition and its group scope; past runs are not what you are deleting.
 - **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
@@ -2406,12 +2408,24 @@ So: **dispatch, then verify with the reader.**
   pages actually visited and **never justifies concluding the site lacks the
   information** — say what was seen, then widen `max_pages`/`max_depth` or sharpen the
   instructions.
-- **Squad tools need an org-bound token — automation tools do not.** The sentence used
-  to bundle the two, and it was wrong about half of it. Squads live in an organization:
-  seven of the eight tools refuse a purely personal token outright (`squads exigem um
-  token com organização`), and `run_squad` only skips the refusal because the org travels
-  with the call. **Automations work in both contexts**, and the token's org is not a gate
-  here, it is the **scope of what you create**: with no organization on the token an
+- **Squad context = the TOKEN's context (squads exist in both).** A token bound to an
+  organization operates **that org's** squads; a token with **no** organization operates
+  **your personal** squads — all nine squad tools (`create_squad`, `update_squad`,
+  `update_squad_step`, `get_squad`, `list_squads`, `run_squad`, `list_squad_runs`,
+  `get_squad_run`, `delete_squad`). Until 09/2026 every squad tool refused a personal token
+  with `squads exigem um token com organização`, although personal squads existed (the
+  native `gerenciar_squads` built them); that refusal is gone. What changes with no org:
+  (1) the squad is born **personal** — only you see and trigger it; (2) **no groups** —
+  `group_ids` is refused, with nothing sent; (3) in an **`approval`** step the approver is
+  **you**: omit the approvers and the hub declares you; `approverGroupRole`, or anyone
+  else in `approverUserIds`, is refused naming the step; (4) agent steps use your
+  **personal** agents. One context **never** reaches the other: a personal token gets
+  "não encontrado entre os seus squads PESSOAIS" for an org squad (even if you are an
+  admin there), and an org token gets "não encontrado nesta organização" for your
+  personal squad — `run_squad` included, and nothing is fired. With a personal token the
+  hub first reads the squad in the personal context; if that read fails for any reason
+  other than 404 the call is refused ("Não foi possível confirmar…") and nothing happens.
+  **Automations work in both contexts too**: with no organization on the token an
   automation is born **personal**; with one it is born **in that organization** — which
   requires you to be an admin of it, revalidated where it is written, not here.
   `list_automations` likewise returns the personal ones plus, when the token carries an
