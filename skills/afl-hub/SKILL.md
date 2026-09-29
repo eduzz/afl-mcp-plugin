@@ -2422,9 +2422,12 @@ So: **dispatch, then verify with the reader.**
   **personal** agents. One context **never** reaches the other: a personal token gets
   "não encontrado entre os seus squads PESSOAIS" for an org squad (even if you are an
   admin there), and an org token gets "não encontrado nesta organização" for your
-  personal squad — `run_squad` included, and nothing is fired. With a personal token the
-  hub first reads the squad in the personal context; if that read fails for any reason
-  other than 404 the call is refused ("Não foi possível confirmar…") and nothing happens.
+  personal squad — `run_squad` included, and nothing is fired. With a personal token every
+  tool that takes a `squad_id` first reads the squad in the personal context, and
+  `run_squad` reads it in the token's context in **both** cases; if that read fails for any
+  reason other than 404 the call is refused ("Não foi possível confirmar…") and nothing
+  happens — a failed read never counts as "allowed" (until 09/2026 an org-token
+  `run_squad` fired anyway when the read failed).
   **Automations work in both contexts too**: with no organization on the token an
   automation is born **personal**; with one it is born **in that organization** — which
   requires you to be an admin of it, revalidated where it is written, not here.
