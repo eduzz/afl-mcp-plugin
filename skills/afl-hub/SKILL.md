@@ -5,12 +5,14 @@ description: >-
   talk to AFL agents, read data connected to them (Jira, HubSpot, Notion,
   knowledge base, databases), write/act through them (create/edit records, with
   confirmation for destructive ops), manage your agents and skills (create/edit/delete,
-  put an org agent in a group, and enable/disable a skill on an agent), create/run org
-  squads, and create/read/edit/delete/run automations. Use
+  put an org agent in a group, and enable/disable a skill on an agent), create/run/delete
+  squads, delete data sources, groups, MCP connections and knowledge documents,
+  create/read/edit/delete/run automations, and delegate a bigger setup to the
+  configuration architect (start/poll/answer/approve a run). Use
   whenever the user wants to ask/act through their AFL agents, search an AFL
   agent's knowledge base, look up or mutate Jira/HubSpot/Notion or database data
   that lives in AFL, create/edit an agent or a skill, create/trigger a squad,
-  create/edit/switch off an automation,
+  create/edit/switch off an automation, have AFL build a whole setup for them,
   or mentions "AFL", "Agents for
   Life", "hub", "meu agente"/"my agent", or an agent by name. Requires the `afl`
   MCP server configured (`claude mcp list` → afl ✔ Connected).
@@ -637,8 +639,11 @@ lacks it — surface verbatim):
   exactly one body (`content` / `file_key` / `file_url`) must be present — a call with no
   body is refused before it goes anywhere. It is a thin facade over
   `gerenciar_documentos` `op: "adicionar"` (same executor, same permissions, same
-  asynchronous extraction/vectorization), so use the native one for `op: "listar"` /
-  `"remover"`. **Indexing is asynchronous** — a search fired immediately after may still
+  asynchronous extraction/vectorization), so use the native one for `op: "listar"`.
+  Its counterpart is **`mcp__afl__delete_knowledge_document`** `{ agent_id, document_id }`
+  (`tools:write`, facade over `op: "remover"`): the removal is permanent, so the answer is
+  `pending_confirmation` with a `confirmationId` — **nothing is removed until you call
+  `confirm_action`** with it. Only documents you uploaded can be removed. **Indexing is asynchronous** — a search fired immediately after may still
   return nothing; confirm with `op: "listar"` before concluding anything. And
   `is_critical: true` documents are **injected into the prompt, not indexed**, so
   `search_knowledge_base` will never return them: verify those by asking the agent to
@@ -1130,6 +1135,13 @@ lacks it — surface verbatim):
   untouched what it does not send. A squad with a required `triggerSchema` **cannot** be
   scheduled (with or without a list): a scheduled fire only carries the message, and the API
   refuses at configuration time.
+- **Delete a squad** — **`mcp__afl__delete_squad`** `{ squad_id, confirm: true }`
+  (`squads:write`). `confirm: true` is **required** (same rule as `delete_automation`):
+  without it the call is refused and **nothing is sent**. Who may: the owner of a personal
+  squad, or an org admin / admin of the group that scopes it; the scope comes from the
+  SQUAD's record — a token bound to an org only reaches that org's squads. A squad with a
+  run in progress is refused (`409`, "cancele-as antes") — cancel the run first. Removes
+  the definition and its group scope; past runs are not what you are deleting.
 - **Automations** — `mcp__afl__run_automation` (scope `automations:run`) fires an
   automation (fire-and-forget) → `{ queued, correlationId }`.
   An error saying access **could not be confirmed** ("Não foi possível confirmar seu
@@ -1254,6 +1266,55 @@ lacks it — surface verbatim):
   describes an intent about a target whose current value you never read is a blind flip;
   sending the desired state is idempotent, and survives a repeat, a retry and two
   concurrent calls.
+
+### Delegate a bigger setup — the configuration architect
+
+For a request that builds **3+ resources** (agents + sources + squad + groups…), topology of an
+org, or anything that needs OAuth along the way, you can **delegate** to AFL's configuration
+architect instead of making every call yourself. It maps the account, asks what is missing,
+proposes a **plan that the user approves**, and only then creates/edits — running as the user,
+with the same RBAC, inside a cost cap. A single tweak is cheaper done directly with the tools
+above.
+
+- **`mcp__afl__start_architect_run`** `{ prompt, organization_id?, teto_usd? }`
+  (`agents:write`) → `{ runId, estado, url, proximoPasso }`. The run is **asynchronous and
+  durable** (legs on a queue); the call returns at once. No `organization_id` = the token's
+  org; personal token = personal scope. `teto_usd` defaults to 3, max 10. It may be refused
+  while the architect is not enabled for the account (`ARCHITECT_RUNTIME`).
+- **`mcp__afl__get_architect_run`** `{ run_id, after_seq? }` (`agents:read`) — state, cost/cap,
+  the plan with each step's state, open questions and the event feed. **Poll it** (every
+  ~20 s, passing `after_seq = ultimoSeq` to get only new events). Its `proximoPasso` tells
+  you what to do next — follow it instead of guessing from the prose:
+  - `answer_architect_questions` (state `aguardando_usuario`) — ask the USER, don't invent;
+  - `approve_architect_plan` (state `aguardando_aprovacao`) — carries `versao` and the list of
+    `destrutivos` (step ids);
+  - `get_architect_run` — still working; poll again;
+  - `decisao_do_usuario` (`aguardando_orcamento`) — cap reached: raise it in the UI
+    (`url`) or cancel;
+  - `nenhuma` — terminal (`concluido`, `concluido_com_pendencias`, `cancelado`, `falhou`,
+    `expirado`). Report the plan steps' final states, not the architect's summary alone.
+- **`mcp__afl__answer_architect_questions`** `{ run_id, respostas: [{ pergunta_id, resposta }] }`
+  (`agents:write`). `resposta` carries `tipo` and the shape of the question:
+  `{tipo:'escolha_unica', valor}` · `{tipo:'escolha_multipla', valores}` ·
+  `{tipo:'texto', texto}` · `{tipo:'recurso', ids}` · `{tipo:'acao_necessaria', concluida}`
+  (all but `texto` accept `outro`, free text). ≤4 per batch; a malformed answer is refused
+  before anything is sent.
+- **`mcp__afl__approve_architect_plan`** `{ run_id, versao, destrutivos_aprovados? }`
+  (`agents:write`). **The approval IS the authorization of every write in the plan** — show
+  the plan to the user and get a yes first. `versao` must be the one you read (an older one is
+  refused: the plan changed). A destructive step (remove, disconnect, replace a squad graph)
+  runs **only** if its id is in `destrutivos_aprovados`; the rest are skipped. Ask about each
+  destructive step individually.
+- **`mcp__afl__cancel_architect_run`** `{ run_id }` (`agents:write`) — cooperative cancel.
+  What was already created **stays**.
+
+The loop: `start_architect_run` → poll `get_architect_run` → `answer_architect_questions` /
+`approve_architect_plan` as `proximoPasso` says → poll until terminal. Only the user's own runs
+are reachable, and a token bound to an org only reaches that org's runs (anything else reads
+as not found). The architect's own writes go through the same hub tools, so a finished run is
+verified the usual way (`get_agent`, `get_squad`, `list_data_sources`…). Undoing a run (every
+resource it created, in reverse order, as a new plan to approve) is on the run's page in the
+UI (`url`).
 
 ### Manage agents and skills
 
@@ -1466,6 +1527,13 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
     `Nome já está em uso` — that is not a create failure to retry, it is a **rename**:
     resolve the existing group with `list_organization_groups` and use
     `update_organization_group`.
+  **`mcp__afl__delete_organization_group`** `{ group_id, organization_id?, confirm: true }`
+  (`agents:write`, org **admin/owner** with an ACTIVE membership) deletes a group. It is a
+  **cascade** — the group *and* every membership association — and a change in
+  **authorization** (agents, squads and sources scoped to it lose that scope), so
+  `confirm: true` is required and you should show the user what hangs on the group
+  (`get_organization_topology`) before sending it. A group of another org comes back as
+  not found (`blocked`), never deleted.
   `group_ids` is **REPLACE, not append**: the list is the desired final state,
   groups left out are unlinked and `[]` unlinks all, which makes resending the same list
   idempotent. Omitting it in `update_agent` leaves the groups untouched — read the current
@@ -1731,6 +1799,14 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     API at all. Now any update on an MCP source re-derives the column from its integration
     (or from `integration_uuid` when you send one), and the answer carries
     `mcpConnectionLinked` so you can confirm it took.
+- **`mcp__afl__delete_data_source`** (`datasources:write`)
+  `{ data_source_id, organization_id?, confirm: true }` — deletes a source, personal or of
+  the organization. `confirm: true` is **required**. The scope is the SOURCE's, read from its
+  record — not the route that happens to answer: an org source you created still needs org
+  **admin/owner** (the personal route matches by creator and would otherwise delete it
+  without the role). `organization_id` only restricts; a token bound to an org only reaches
+  that org's sources. The source's agent links go with it (connected agents lose its tools at
+  once). "Could not verify the scope" is **not** "source missing" — retry, never recreate.
 - **`mcp__afl__create_mcp_connection`** (`datasources:write`)
   `{ name, url, headers?, auth_type?, auth_value?, dedupe_by_url? }` — registers an external
   MCP server as a connection and discovers its tools (handshake + `tools/list`), returning the
@@ -1740,6 +1816,11 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   DIFFERENT credential is refused (it never overwrites another account's credential). Personal
   scope only — an org MCP connection is still a UI step. The URL must be publicly reachable
   (private IPs, internal hosts and cloud metadata endpoints are blocked).
+  **`mcp__afl__delete_mcp_connection`** `{ integration_uuid }` (`datasources:write`) removes
+  YOUR personal connection. It **refuses while any of your `mcp_server` sources still uses
+  it** (they would go inert, failing only on their first run) — delete those with
+  `delete_data_source` first. Another user's connection, or a non-MCP integration, is not
+  found.
   - **Once the source exists, its catalog is a first-class read and its tools run without
     an agent and without an LLM**: `mcp__afl__list_mcp_tools` → `mcp__afl__mcp_call_tool`
     (both `tools:read`, described under "Which tool to use"). Before them the catalog only
@@ -2271,12 +2352,10 @@ So: **dispatch, then verify with the reader.**
   connected sources match the name EXACTLY, resolution fails listing the candidates with their
   ids (it used to pick one arbitrarily, so a write could land on the wrong source). Pass the
   id to disambiguate; a partial match still resolves to the first hit.
-- **Deleting an organization group is UI-only.** The hub creates and updates groups
-  (`create_organization_group` / `update_organization_group`) but does not delete one, and
-  that is deliberate: the removal is a **cascade** — the group *and* every membership
-  association with it — not a soft delete, and its real blast radius is a change in
-  **authorization** that the hub cannot show you before the fact. Do it on the AFL org
-  screen, with the members in front of you.
+- **Deleting an organization group is a cascade.** `delete_organization_group` (with
+  `confirm: true`) removes the group *and* every membership association with it — not a
+  soft delete — and its real blast radius is a change in **authorization** the delete itself
+  does not preview. Read `get_organization_topology` first and confirm with the user.
 - **`list_integrations` reports STORED state, not a live probe.** `connected`,
   `connectionStatus` and `grantedScopes` are what the platform recorded at connect/refresh
   time; the row also survives the account being removed on the provider's side. So a
