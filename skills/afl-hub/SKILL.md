@@ -1148,6 +1148,17 @@ lacks it — surface verbatim):
   acesso…") means the server could not evaluate membership/group scope right now and
   refused: **nothing ran** and no execution was recorded. It is not "no permission" —
   retry in a moment; never report the automation as started.
+  An error saying the automation is **DESLIGADA** (409 `AUTOMATION_INACTIVE`) means it exists,
+  you reach it, and it is switched off (`is_active=false`): **the id is right, nothing ran**.
+  An inactive automation does not run — not even manually (the UI's "executar agora" refuses
+  the same way), and there is no "run once without switching it on". To **test one you just
+  created inactive**: `update_automation { automation_id, is_active: true }` (needs
+  `automations:run`; while on it also runs on its schedule) → `run_automation` →
+  `get_automation_result` → if it must stay off, `update_automation { is_active: false }`.
+  This refusal only comes **after** the access check: someone who cannot reach the automation
+  still gets a plain not-found (404), so "desligada" never leaks that it exists. (Until
+  09/2026 the hub answered 404 "não encontrada ou inativa" for an inactive one, which read as
+  a wrong id.)
   `mcp__afl__list_automations` (`automations:read`) lists the visible ones.
   **Reads of ONE resource can fail the same way** — `get_squad`, `get_squad_run`,
   `list_squad_runs`, `get_automation`, `get_automation_result`: "Não foi possível
