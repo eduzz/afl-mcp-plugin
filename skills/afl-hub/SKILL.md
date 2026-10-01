@@ -295,6 +295,17 @@ no model in the middle); for a JUDGEMENT
     `gerenciar_documentos` (knowledge base), `jira_anexar_arquivo` or `hubspot_crm_attach`
     without downloading anything. Drive/OneDrive reads are scoped to the folders
     configured in the agent's source, so a `list`/`search` won't walk the whole drive.
+  - **Spreadsheets: every row carries its REAL row number** (since 2026-10, AV-2324/2326/2437).
+    `google_sheets_read` and `datasource_google` (`op: "read"`) render a `Linha` column and return
+    `rowNumbers` (+ `headerRow`); the "registros 1–6" page position is NOT a sheet row. A
+    `range` that pins rows (`A1:B12`) returns **all** its rows — none is swallowed as header;
+    a whole-tab read declares the title rows it put above the header. `datasource_google`
+    takes `sheet_name` on **read** too (one tab; unknown name is refused with the real tabs)
+    and returns `spreadsheetId` — the Google FILE id that `google_sheets_*` accept (the
+    `sourceId` is the platform's source id; passing it as `spreadsheet_id` now resolves only
+    when it is a sheet source connected to that agent). To **write a row**, address it by key:
+    `datasource_google` `{ op: "write", column, match_column, match_value, value }` — zero or
+    several matching rows are refused, and `row` + key that disagree are refused (nothing written).
   - `mcp__afl__notion_query` `{ agentId, databaseId?, query? }` — pass `databaseId`
     (the Notion database id) to query a specific DB; otherwise `query` does a
     workspace search. `notion_database_schema` `{ agentId, database_id | database_name }`
@@ -348,7 +359,9 @@ no model in the middle); for a JUDGEMENT
     `list_mcp_tools` (org first with active membership, then personal) — it works on a
     personal source of the token's owner and on an organization source. Result comes in
     the hub's standard read envelope (`data` + `message`); errors from the MCP server
-    arrive verbatim.
+    arrive verbatim. For a **large** single object or text (over ~8k characters) `message`
+    only **summarises** the bulky fields (size + head, "inteiro em `data`") — the whole value
+    is in `data` (text in `data.rawText`). Read `data`; never conclude from the summary.
 
     **It is NOT the server's byte-for-byte JSON**, and both differences change the
     arithmetic you do on top of it. `data` carries the tabulated collection
@@ -1859,15 +1872,17 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     job of API documentation, under a scope a read-only collector has no other reason to
     hold.
 - **`mcp__afl__connect_agent_data_source`**
-  `{ agent_id, data_source_id, sync_frequency?, allow_write? }` and
+  `{ agent_id, data_source_id, sync_frequency?, allow_write?, allow_read? }` and
   **`mcp__afl__disconnect_agent_data_source`** `{ agent_id, data_source_id }`
   (`datasources:write`) attach/detach a source — both **org-aware** (org agent → b2b path,
   caller must be org admin/owner; else the personal connection). `allow_write` grades the
   new link's write permission at connect time; omitting it inherits the source (and, on a
-  re-connect, keeps whatever the link already had).
+  re-connect, keeps whatever the link already had). `allow_read: false` creates a
+  **write-only** link (see below); omitting it keeps the default (the link reads) — it is
+  never sent as `true` implicitly.
 - **`mcp__afl__update_agent_data_source_connection`**
-  `{ agent_id, data_source_id, allow_write? }` (`datasources:write`) changes the write
-  permission of a link that **already exists**, without disconnecting and reconnecting —
+  `{ agent_id, data_source_id, allow_write?, allow_read? }` (`datasources:write`) changes
+  the write and/or read permission of a link that **already exists**, without disconnecting and reconnecting —
   a reconnect wipes the link's configuration, and that detour was the whole reason this
   tool exists. It identifies the link by the **pair** `agent_id` + `data_source_id`, the
   two ids `list_agents` and `list_data_sources` already hand you. That pair is the natural
@@ -1911,6 +1926,29 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     source** — two rows, two syncs, two things to keep aligned. Now it is one source and
     two links: connect both, then `update_agent_data_source_connection` with
     `allow_write: false` on the one that should only read.
+  - **Reading is the link's own axis too: `allow_read` (migration 0355, AV-2363).**
+    Until 10/2026 every connected source was readable, by every path — so an agent that
+    only had to FEED a spreadsheet (e.g. an HR agent logging the questions its knowledge
+    base could not answer, with who asked next to a health or salary topic) could also be
+    asked "what have my colleagues been asking?", and the orchestrator's plan even told it
+    to read that sheet on every question. A prompt rule reduced the leak and never closed
+    it. `allow_read: false` makes the link **WRITE-ONLY**:
+    - the agent cannot read the source by **any** path — not the `datasource_orchestrator`
+      plan, not `datasource_*` or the native tools (Drive, OneDrive, Excel…), not
+      knowledge-base search;
+    - the link contributes **only the ability to APPEND ROWS**, and only where that
+      primitive exists: a **Google Sheets** spreadsheet (`datasource_google` op
+      `append_row`) and a **Microsoft 365 Excel** spreadsheet (`excel_append_rows`). On
+      any other source type a write-only link is **inert** (neither reads nor writes);
+    - full writing (overwrite a range — `excel_write_range`, op `write` —, edit, delete,
+      create an issue…) needs read **and** write on the link;
+    - appending is still a write, so it needs the source with `allow_agent_write: true`
+      and the link's `allow_write` not `false`. The backend **refuses** `allow_read: false`
+      together with `allow_write: false` (a link that neither reads nor writes).
+    Sending only `allow_read` leaves the link's write grading untouched; sending neither
+    field keeps the tool's original meaning (write goes back to inheriting the source).
+    `list_agents` shows the result per agent as `dataSources[].allowRead` — never pick an
+    agent with `allowRead: false` to answer questions about that source.
 - **"This agent has no access to the source" now separates a MISSING CONNECTION from the
   WRONG SCOPE.** When an **organization** agent reads a source that is in fact the
   caller's **personal** one, the refusal says the problem is the source's **scope** —
