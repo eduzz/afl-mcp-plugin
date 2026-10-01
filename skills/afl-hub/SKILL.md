@@ -813,7 +813,10 @@ lacks it — surface verbatim):
   the approver is you, declared by the hub) ·
   `action` → `{ actionType, messageContent?, actionConfig }` with `actionType` in
   `send_inbox_notification` · `webhook` (needs `actionConfig.webhookUrl`) ·
-  `send_whatsapp` (needs `actionConfig.whatsappRecipient`) · `execute_integration`
+  `send_whatsapp` (needs `actionConfig.whatsappRecipient` in a **personal** squad; in an
+  **organization** squad it is optional — the message goes out through the PLATFORM number to
+  the verified WhatsApp of the run's person, and any other number is refused at run time) ·
+  `execute_integration`
   (needs `actionConfig.integrationId` + `integrationActionName`) · `generate_report`
   (needs top-level `config.reportAgentId` + `actionConfig.reportType`) ·
   `squad` → `{ squadId, waitForCompletion? }`, chaining **another** squad of the same context.
