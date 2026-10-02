@@ -807,7 +807,16 @@ lacks it — surface verbatim):
   up the fix.
   Lost the `run_id` (new session, `run_squad`'s response is gone)? **`mcp__afl__list_squad_runs`**
   `{ squad_id }` (`squads:read`) lists that squad's runs, **most recent first** — same compact
-  summary as each item, no step output. `page`/`limit` paginate (`limit` 1–100). Filter with
+  summary as each item, no step output.
+  **Runs have a human name** (`name` + `nameSource`, both in `list_squad_runs` items and in the
+  `get_squad_run` envelope): `nameSource: "auto"` = generated from the trigger (the squad's
+  name template, a text field of the trigger contract, the round item label, or the first line
+  of the message), `"manual"` = a person renamed it in the UI, `null` = a run older than the
+  field. Refer to runs by `name` when talking to the user — that's how people identify them,
+  not by `#3c7fe4a1`. Renaming is UI-only (no hub tool). `get_squad` shows the squad's
+  `runNameTemplate` (`{{trigger.<key>}}`, `{{squad.name}}`, `{{date}}`; `null` = automatic rules),
+  read-only through the hub.
+  `page`/`limit` paginate (`limit` 1–100). Filter with
   `status` (one value or an array — `pending`, `running`, `waiting_approval`, `completed`,
   `partial`, `failed`, `cancelled`) and/or `start_date`/`end_date` (`YYYY-MM-DD`, over the run's
   creation date; `end_date` is **inclusive** — the whole day counts).
@@ -1624,6 +1633,29 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
     changed since you read it: the edit fails instead of clobbering someone else's
     change. The result carries `promptInjectionEdit` (edits applied, size before/
     after) so you can confirm the effect without re-reading the prompt.
+- **Skill attachments (files a skill owns: logos, backgrounds, brand guides,
+  templates)** — `mcp__afl__list_skill_assets` `{ skill_id }` (`skills:read`, metadata
+  only: `name`, `ref` = `asset://<slug>/<name>`, type, size, `visibility`, and
+  `publicUrl` when public); `get_skill` also returns them under `assets`.
+  **`mcp__afl__upload_skill_asset`** `{ skill_id, file_name, content_base64 | url,
+  description?, visibility?, replace? }` (`skills:write`): exactly ONE of
+  `content_base64` / `url` (https only, redirects refused); 5 MB per file, 50 per
+  skill, types svg/png/jpg/jpeg/webp/gif/pdf/txt/md/csv/json/docx/xlsx/pptx; the name
+  is normalized (lowercase, no accents); SVG is sanitized (scripts, `on*`, external
+  references removed — `sanitizedRemovals` says how much); an existing name fails
+  unless `replace: true`. **`mcp__afl__delete_skill_asset`** `{ skill_id, asset_id,
+  confirm: true }` (`skills:write`) — destructive, refused without `confirm`.
+  - Who can: managing = whoever can EDIT the skill (owner of a personal skill; org
+    owner/admin, or admin of the group the skill is scoped to — a plain org member
+    gets `blocked`); platform skills only through the admin UI/API, never the hub.
+  - `visibility: "public"` puts the file on the CDN at a stable, unauthenticated URL —
+    only for brand material that is already public. Private (the default) is enough
+    for agents to use the file.
+  - Agents with the skill ENABLED see a catalog line per attachment in the skill's
+    prompt block and cite `asset://<slug>/<name>` directly in `renderizar_imagem`,
+    `renderizar_pdf`, `criar_pagina_web` (`imagens[].url`) and `criar_documento`
+    (`imagem_url`, `marca.logo_url`); text attachments are read in-turn with
+    `obter_anexo_skill`. An agent WITHOUT the skill enabled is refused.
 - **Enable a skill on an agent (opt-in)** — `mcp__afl__list_agent_skills` `{ agent_id }`
   (`agents:read`) lists the skills enabled on an agent, each with an `agent_skill_id`
   (requires access to the agent: yours, or one of your organizations').
