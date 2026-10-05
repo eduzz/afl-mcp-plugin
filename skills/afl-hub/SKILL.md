@@ -2322,6 +2322,25 @@ published, or is narrower in audience than the app being published refuses the p
 opening another app never bypasses that app's authorisation. Every refusal is visible in
 the shell chrome; nothing about this path is allowed to be silent again.
 
+## Images in an app — logo, avatar, photo
+
+There is no image field: cite the image **in the text** (`descricao` on `criar_app_web`,
+`instrucao` on `editar_app_web`) in one of three forms — an `https://` URL on the platform
+CDN (the agent's `avatarImageUrl` from `get_agent` is the typical case), a skill attachment
+`asset://<skill>/<file>`, or `data:image/…;base64,…`. All three reach the page **byte for
+byte**: the model that writes the HTML only sees a short marker (`afl-img://N`) and the
+platform injects the original value afterwards. Before this (AV-2430) the model copied the
+base64 itself and corrupted it mid-string — 4.6k–12k-char data URIs broke while the edit
+still answered "App atualizado".
+
+- **Prefer the URL.** It is short and does not bloat the page (and the page stays editable:
+  embedded images used to count toward the 200 KB edit window).
+- `http://` images and `data:` URIs that are not images are **refused before any spend**
+  (`error: "imagem_invalida"`). Images from other sites are blocked by the app's CSP.
+- If a requested image did not make it into the page, the response carries
+  `warnings[].code = "imagem_nao_aplicada"` and an **IMAGENS** block in the message. Do not
+  report the app as done; re-ask saying *where* the image goes.
+
 ## Changing an app's look — `tema`
 
 `criar_app_web` and `editar_app_web` both take **`tema`** `{ modo, cor_primaria?, fonte? }`.
