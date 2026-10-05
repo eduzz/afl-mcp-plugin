@@ -363,6 +363,19 @@ no model in the middle); for a JUDGEMENT
     only **summarises** the bulky fields (size + head, "inteiro em `data`") — the whole value
     is in `data` (text in `data.rawText`). Read `data`; never conclude from the summary.
 
+    **UNCERTAIN outcome (timeout after dispatch).** The call has a 30 s deadline. If the
+    request was SENT and the response never came back, on a tool that is not known to be
+    safely repeatable, the result is `isError: true` with JSON
+    `{ "outcome": "unknown", "code": "MCP_WRITE_OUTCOME_UNKNOWN", ... }` and
+    `_meta.toolCalls[0].effect: "unknown"`. It means **the action MAY HAVE RUN** (the case
+    that created this: a Zapier `..._publish_photo_s` timed out at 32 s and the post was
+    published). **Do NOT retry** — verify in the target system first. "Known repeatable" =
+    `annotations.readOnlyHint: true`, `annotations.idempotentHint: true`, or (no
+    annotation) a read verb in the name (`get`/`list`/`search`/`read`/`fetch`/`query`…) and
+    no write verb; anything unknown is treated as a write. A repeatable read that times out
+    still says "Tente novamente"; a squad step whose turn left such a call fails WITHOUT
+    automatic retry.
+
     **It is NOT the server's byte-for-byte JSON**, and both differences change the
     arithmetic you do on top of it. `data` carries the tabulated collection
     (`headers`/`rows`/`totalRows`), plus **`data.envelope`** — the fields the server
@@ -516,6 +529,10 @@ _meta: { toolCalls: [{ tool: "google_gmail_send", status: "ok", durationMs: 934 
 - Same `status` vocabulary. A destructive write that returned a `confirmationId`
   reads `pending_confirmation` — **nothing ran**; a missing scope or an inactive
   membership reads `blocked`, which is **not** an integration failure.
+- `effect: "unknown"` next to `status: "error"` means the request was sent and the
+  response was lost — **the effect is unknown, not absent**: a write may have been
+  applied. Never retry such a call blindly (same field appears per tool call in
+  `chat_with_agent`'s record, and the visible block says "EFEITO DESCONHECIDO").
 - **`llm` is absent** — the key does not exist. Not `null`, not zeroed: there was no
   model. A zeroed `llm` would assert a zero-cost model call, which is false.
 - Use it to audit writes uniformly: before this, the only proof an effect happened
