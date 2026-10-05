@@ -376,6 +376,14 @@ no model in the middle); for a JUDGEMENT
     still says "Tente novamente"; a squad step whose turn left such a call fails WITHOUT
     automatic retry.
 
+    **AFL files go to an MCP server as a URL, never as a `file_key`.** An MCP server is an
+    EXTERNAL service and cannot open AFL storage: a `params` value that is an AFL storage key
+    (`<env>/private/…` or `<env>/public/…`) is REFUSED before dispatch — the tool is NOT
+    called, `isError: true`, and the message names the field. Resend with the file's
+    `https://` URL (in a squad, the `url` next to the `file_key` in ARQUIVOS DA EXECUÇÃO;
+    otherwise the URL the generating tool returned). Nothing was sent, so retrying with the
+    URL is safe.
+
     **It is NOT the server's byte-for-byte JSON**, and both differences change the
     arithmetic you do on top of it. `data` carries the tabulated collection
     (`headers`/`rows`/`totalRows`), plus **`data.envelope`** — the fields the server
