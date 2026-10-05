@@ -1363,8 +1363,11 @@ above.
   ~20 s, passing `after_seq = ultimoSeq` to get only new events). Its `proximoPasso` tells
   you what to do next — follow it instead of guessing from the prose:
   - `answer_architect_questions` (state `aguardando_usuario`) — ask the USER, don't invent;
-  - `approve_architect_plan` (state `aguardando_aprovacao`) — carries `versao` and the list of
-    `destrutivos` (step ids);
+  - `approve_architect_plan` (state `aguardando_aprovacao`) — carries `versao`, the list of
+    `destrutivos` (step ids) and `estimativaDeExecucao` (the model cost of executing the plan:
+    steps with `semModelo: true` run without the model, at no model cost; each other step is
+    ~1 call; `custoEstimadoUsd` null = no measurement yet). **Show the estimate to the user
+    before approving**;
   - `get_architect_run` — still working; poll again;
   - `decisao_do_usuario` (`aguardando_orcamento`) — cap reached: raise it in the UI
     (`url`) or cancel;
