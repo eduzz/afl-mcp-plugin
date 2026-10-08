@@ -706,6 +706,15 @@ lacks it — surface verbatim):
   key/URL has no extension. Unsupported formats (e.g. `.xlsx`) are rejected — read the
   data with the integration's own tool and pass the text as `conteudo`. `op: "remover"`
   is destructive (goes through `confirm_action`).
+- **Forget something about the person** → `gerenciar_documentos` `{ agentId, op: "esquecer",
+  termos: ["…"] }` (1–5 literal terms, personal agent only). One call removes the term
+  from every place memory keeps it for the token's user: chat notes (`agent_chat`),
+  profile facts, Life Memory episodes and entities. Uploaded documents that mention it
+  are **not** deleted — they come back in the result so you can `op: "remover"` them explicitly.
+  It returns **`success: false`** when nothing matched, when removal was partial, when a
+  term is too short or too generic (over the per-kind cap, nothing is deleted), and on
+  an organization agent — never tell the user it was forgotten unless the call
+  succeeded. The current conversation's own history still holds the value.
 - **Generate a file** → `mcp__afl__criar_documento` (`tools:write`)
   `{ agentId, formato: "xlsx"|"docx"|"pptx"|"pdf"|"md"|"html", titulo, conteudo }`.
   Synchronous: when it returns, the file already exists in storage. Read **`data.url`**
@@ -772,6 +781,10 @@ lacks it — surface verbatim):
 - **`mcp__afl__execute_tool`** (scope-gated) — agent-less **org** tool call: run a
   named tool directly in the token's organization context without picking an agent.
   Use only when you have no suitable agent carrier and know the exact `tool_name`.
+  A native tool whose skill the owner **switched off** (e.g. `native-gerenciar-agentes`
+  disabled or removed on the Alter) is refused with `reason: skill_desligada_pelo_dono`
+  / `outcome: refused` — that is the owner's decision, not an outage; don't retry it
+  through another tool.
 - **`mcp__afl__execute_in_background`** (`tools:write`) → returns a `task_id`; fetch it
   later with **`mcp__afl__get_task_result`** `{ task_id }` (`tools:read`). Use for
   long/multi-step work so you don't block.
