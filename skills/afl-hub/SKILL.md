@@ -314,6 +314,25 @@ no model in the middle); for a JUDGEMENT
     (`cell`, `value`, `row`, `column`, `match_*`, `value_input`, `data`) is refused, naming
     them, and neither writes nor reads. Before 2026-10 the hub stripped `op` and every call read
     in silence (AV-2331).
+  - **`datasource_google` documents come WHOLE when they fit; the cut is declared when not**
+    (since 2026-10, AV-2358). A Google Docs/.docx/.pdf of the source arrives in full in
+    `message` (~36,000-char block), with or without `query`; `data` carries only metadata
+    (`totalChars`, `offset`, `charCount`, `complete`, `delivery`: `whole|window|excerpts`,
+    and — only for a window — `has_more`/`next_offset`) — **there is no `data.content` anymore**. In a **folder** or
+    **multi-file** source every document gets a fair share of the block (small ones whole) and
+    each one that did not fit ends with `[Trecho: caracteres X–Y de N. … o documento continua:
+    datasource_google com name="…", file_id="…" e offset=Y.]`; `data.documents[]` says what came
+    from each. To continue — or to read a PDF/DOCX/sheet the folder only lists — call again with
+    **`file_id`** (from the listing) and **`offset`** (the `next_offset`) **only while you need the
+    rest**: to FIND something in a large document, prefer `query` (excerpts from any position).
+    Inside an agent's turn there is a cap of 3 continuations of the same document (then the read is
+    refused with `outcome: "refused"`, pointing to `query`); through the hub there is no cap.
+    A `file_id` outside the source is refused without reading anything; so is `offset` without
+    `file_id` on a multi-file source. On a document `offset` counts **characters** (negative is refused); on a sheet
+    it still counts **rows**. A large native sheet read inline in a folder is cut with a note giving
+    its own `file_id` (read it alone, paginated) — the documents keep their share. A `file_id` of a
+    selected **folder** lists that folder; documents inside it are part of the source. Never conclude
+    a fact is missing from a document you have not read to the end.
   - `mcp__afl__notion_query` `{ agentId, databaseId?, query? }` — pass `databaseId`
     (the Notion database id) to query a specific DB; otherwise `query` does a
     workspace search. `notion_database_schema` `{ agentId, database_id | database_name }`
@@ -1764,7 +1783,13 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   lists the connected integrations (personal and/or the org's) with the identity of the
   account behind each: `connected`, `connectionStatus`, `grantedScopes` (which is what
   separates "expired token" from "that account never authorized this service") and
-  `needsReconnect`. Org scope needs membership (member is enough).
+  `needsReconnect`. Org scope needs membership (member is enough). The personal scope
+  includes the **OAuth** integrations (Microsoft 365, Google, Jira, Notion — type
+  `microsoft_365`, `google_services`, …), whose uuid is the `integration_uuid` of
+  `create_data_source`; before AV-2280 it only showed credential-based ones, and a connected
+  Microsoft account came back as "no integration". A **sign-in** token that granted only
+  identity scopes (`openid`, `email`, `profile`, `User.Read`…) is **not** listed: a source
+  created on it would read nothing.
   **Why the tool exists:** `list_data_sources` only ever exposes the uuid of an integration
   some source is **already** using, so an integration that was connected and never used was
   undiscoverable through the hub — the chain from "connect in the UI" to "create the source"
@@ -1839,6 +1864,17 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   A source is created **read-only** unless you pass
   `allow_agent_write: true` — plan for that: a fresh source + connect is not enough for
   the agent to write anywhere.
+  - **`microsoft_365_data` says WHICH service it reads, in `config.serviceType`:**
+    `outlook_mail`, `outlook_calendar`, `onedrive`, `sharepoint`, `excel` or `teams`
+    (e.g. the user's Outlook calendar → `{ "serviceType": "outlook_calendar" }`).
+    Aliases ("agenda", "calendar", "email") are translated to the canonical pair the
+    runtime reads (`serviceType: "outlook"` + `outlookType`); a source **without** a
+    service, or with one nobody can translate, is **refused** — before AV-2280 it was
+    created, connected and never read anything, because tool selection, the executor
+    gate and the indexer did not understand the name the model chose. A `source_type`
+    that already names the service (`onedrive`, `outlook_calendar`) fills in a missing
+    `serviceType` and completes a bare `"outlook"`: `outlook_calendar` +
+    `{ "serviceType": "outlook" }` is the calendar, not the mailbox.
   - **`meta_ads_data` requires `integration_uuid` AND a non-empty `adAccountIds`.**
     One Meta login sees N Business Managers × N ad accounts, so a source that does not
     declare which accounts it covers would read every account the person can see. An
