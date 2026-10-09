@@ -2369,7 +2369,14 @@ Notes that save a wrong conclusion:
 - **The fix is `editar_app_web`, not a new app.** Pass `capacidades` with the **whole**
   action list (existing ones *plus* the new); it replaces, it does not append. Recreating
   loses the link, the history and every adjustment. Only `status: "falhou"` justifies
-  `criar_app_web` again.
+  `criar_app_web` again — and then **delete the failed row first**:
+  **`mcp__afl__delete_app_web`** `{ app_id, confirm: true }` (`agents:write`, owner-only,
+  logical delete; `409` while the page is still being generated). A failed creation leaves
+  a `falhou / v0` row that `editar_app_web` refuses (`sem_versao_editavel`); recreating
+  without deleting stacks one dead row per attempt. The failure itself now says why
+  (`error` = `resposta_em_json` | `resposta_em_texto` | `fragmento_sem_documento` |
+  `limite_de_saida_esgotado` | `saida_vazia`, plus what to change) and names the failed
+  `failedAppId` — read it before retrying with the same brief.
 - **`despublicar: true` leaves the app `revogado`, and `revogado` is still editable.**
   Changing the contract of a live app is refused until you pass it; what comes out is
   not called "draft" — `listar_apps` shows `revogado` — but `editar_app_web` keeps
