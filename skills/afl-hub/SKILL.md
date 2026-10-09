@@ -279,8 +279,10 @@ no model in the middle); for a JUDGEMENT
     `hubspot_crm_files`, `notion_pages_export`, `google_gmail_read`,
     `google_calendar_read`, `google_drive_read`, `google_sheets_read`,
     `microsoft_mail_read`, `microsoft_calendar_read`, `microsoft_onedrive_read`,
-    `microsoft_sharepoint_scan`, `microsoft_sharepoint_document`, `github_search`.
-    `jira_ler_issue` and `jira_ler_comentarios` take the same `verbosity` as
+    `microsoft_sharepoint_scan`, `microsoft_sharepoint_document`, `github_search`,
+    `datasource_notion` (reads a configured Notion SOURCE — database/page — by `name`/`id`;
+    read-only: it has no `op`, and writing to Notion goes through `notion_pages_*` /
+    `notion_database_*_entry`). `jira_ler_issue` and `jira_ler_comentarios` take the same `verbosity` as
     `jira_search` (compact by default), and `jira_ler_issue` returns the issue's
     numeric `id` alongside `key`. `microsoft_sharepoint_scan` resolves `site_id`/
     `drive_id` from the agent's SharePoint source — **don't go digging for them**;
@@ -306,6 +308,12 @@ no model in the middle); for a JUDGEMENT
     when it is a sheet source connected to that agent). To **write a row**, address it by key:
     `datasource_google` `{ op: "write", column, match_column, match_value, value }` — zero or
     several matching rows are refused, and `row` + key that disagree are refused (nothing written).
+    **`datasource_google` is registered as a WRITE tool** (scope `tools:write`, even to read) and
+    publishes `op` (`read` | `write` | `append_row`), **optional, default `read`**: a call without
+    `op` reads. Writing REQUIRES `op` — a call without `op` that carries a write parameter
+    (`cell`, `value`, `row`, `column`, `match_*`, `value_input`, `data`) is refused, naming
+    them, and neither writes nor reads. Before 2026-10 the hub stripped `op` and every call read
+    in silence (AV-2331).
   - `mcp__afl__notion_query` `{ agentId, databaseId?, query? }` — pass `databaseId`
     (the Notion database id) to query a specific DB; otherwise `query` does a
     workspace search. `notion_database_schema` `{ agentId, database_id | database_name }`
@@ -874,8 +882,17 @@ lacks it — surface verbatim):
   `action` → `{ actionType, messageContent?, actionConfig }` with `actionType` in
   `send_inbox_notification` · `webhook` (needs `actionConfig.webhookUrl`) ·
   `send_whatsapp` (needs `actionConfig.whatsappRecipient` in a **personal** squad; in an
-  **organization** squad it is optional — the message goes out through the PLATFORM number to
-  the verified WhatsApp of the run's person, and any other number is refused at run time) ·
+  **organization** squad there are two modes: with `actionConfig.whatsappSenderConfigUuid` — the
+  `configUuid` of a WhatsApp number **connected to the organization** (the `config.configUuid` of
+  its `whatsapp_data` source) — it goes out through THAT number to **any** number(s) in
+  `whatsappRecipient` (required; up to 50, comma-separated; no verification needed; a number of
+  another org, removed, or used in a personal squad is refused; 200 messages/day per number). On the
+  official Cloud API, a recipient who has not written in the last 24h gets an approved notice
+  template and the content waits until they reply (declared success, not delivery) — with no
+  approved notice template the step fails saying so. Without `whatsappSenderConfigUuid`,
+  `whatsappRecipient` is optional and the message goes through the PLATFORM number only to the
+  verified WhatsApp of the run's person; any other number is refused at run time. The same two
+  modes apply to an organization **automation**'s `send_whatsapp` action) ·
   `execute_integration`
   (needs `actionConfig.integrationId` + `integrationActionName`) · `generate_report`
   (needs top-level `config.reportAgentId` + `actionConfig.reportType`) ·
@@ -972,8 +989,10 @@ lacks it — surface verbatim):
   accept a `stepKey`. Read the returned `steps[].id` if you plan to `update_squad`
   (`update_squad_step` addresses a step by either one — `stepKey` or `id`).
   Step limits are enforced at the boundary with a message that names the field:
-  `timeoutSeconds` 30–1800 (default 170; **1445** on an `agent` step), `maxRetries` 0–3,
-  `retryDelaySeconds` 5–300.
+  `timeoutSeconds` 30–1800 (default 245 — the full inline turn; it was 170, below the 180s of free
+  clock an image needs, so a default `agent` step never generated one; **1445** on an `agent` step),
+  `maxRetries` 0–3, `retryDelaySeconds` 5–300. A step whose image was refused for lack of clock
+  carries `imageRefusedForTime` (cause + what to adjust) in `get_squad_run`.
   An `agent` step may now hand long work to a **background task** and wait for it, which
   is why its ceiling is 1445s — 245s of inline dispatch plus the 1200s deadline of the
   background task, the most the path can actually spend — but the turn the agent answers
@@ -1634,7 +1653,7 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   happens *after* the agent exists, so a failure there returns the agent plus a `warning`:
   fix it with `update_agent`, don't recreate. `group_ids` on a personal agent is an error.
 - **Skills** — `mcp__afl__list_skills`
-  `{ visibility?, type?, category?, search?, organization_id?, page?, limit?, fields? }`
+  `{ visibility?, type?, category?, search?, organization_id?, page?, limit?, fields?, include_inactive? }`
   and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`).
   **Start with `visibility`, not with the whole catalog.** It takes `personal |
   organizational | platform`, and it is the first filter because an unfiltered listing is
@@ -1658,6 +1677,12 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   echoes `visibility` + `organizationId`. **`mcp__afl__update_skill`**
   `{ skill_id, ... }` (`skills:write`) patches (slug/type/visibility are immutable);
   **`mcp__afl__delete_skill`** `{ skill_id }` (`skills:write`).
+  - **Deleting is a SOFT delete, and the skill keeps its slug.** It becomes `isActive: false`,
+    leaves the default `list_skills`, and `create_skill` with the same slug answers
+    `already exists` (when you can manage it, the error names it: `... but is INACTIVE (id …)`).
+    To find it, `list_skills { include_inactive: true }` (adds your inactive personal/org skills;
+    inactive platform skills never show); to reuse it, `update_skill { skill_id, is_active: true }`
+    and edit — or pick another slug. Same for a skill switched off with `is_active: false`.
   - **To change PART of a `prompt_injection`, never resend the whole text.** Use
     `prompt_injection_edits: [{ find, replace, replace_all? }]` — anchored
     substitutions applied server-side to the CURRENT value. `find` is matched
@@ -1893,6 +1918,17 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     from the other and writes both**, so sending either is enough. Types that already
     name the service (`google_sheet`, `google_doc`, `google_forms`) need no
     `googleSourceType` — but they still need `integration_uuid`.
+  - **A Gmail source indexes only the LAST 90 DAYS by default.** Scope it in `config`:
+    `gmailLabels` (label ids — `INBOX`, `SENT`, `Label_7`…; several labels are an OR)
+    and `gmailIndexDays` (days; `0` = the whole mailbox, opt-in — volume and cost grow
+    with it). Example: `config: { googleSourceType: "gmail", gmailLabels: ["Label_7"],
+    gmailIndexDays: 180 }`. Changing either (create or update) re-crawls the source
+    under the new scope; documents already indexed outside it are not removed.
+  - **An Outlook Mail source also indexes only the LAST 90 DAYS by default**
+    (`microsoft_365_data`, `config: { serviceType: "outlook", outlookType: "mail" }`).
+    Scope it in `config`: `selectedItems` (folders — `[{ id, name, type: "folder_mail" }]`;
+    empty = every folder) and `outlookIndexDays` (days; `0` = the whole mailbox, opt-in).
+    Same rule: changing the scope re-crawls; nothing indexed outside it is removed.
 - **`mcp__afl__update_data_source`** (`datasources:write`):
   `{ data_source_id, organization_id?, allow_agent_write?, write_permission_note?, name?,
   description?, config?, integration_uuid?, sync_frequency?, is_active? }` — edits a source
