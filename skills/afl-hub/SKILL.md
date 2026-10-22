@@ -354,6 +354,12 @@ no model in the middle); for a JUDGEMENT
     gives you the **column names and types** — call it before a
     `notion_database_*_entry` write instead of guessing property names (they are
     LITERAL for Notion: accents and case are part of the name).
+    **Several Notion workspaces:** the account comes from the agent's Notion SOURCE.
+    With sources in different workspaces, the target decides — the id or the EXACT
+    title of a page/database pinned in one source, or the source name; otherwise the call is refused with
+    `data.reason: 'conta_ambigua'` listing the sources by name — call again with
+    `fonte: "<source name>"` (every `notion_*` tool takes it), or ask the user which
+    source. Never ask the user for ids.
   - `mcp__afl__whatsapp_messages_analyze` `{ agentId, analysis_type?, phone?, days?,
     max_results?, include_content?, datasource_name? }` — WhatsApp history, **no model
     in the middle** (SQL over the messages the Evolution webhook persists in real
