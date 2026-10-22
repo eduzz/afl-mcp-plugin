@@ -612,6 +612,14 @@ lacks it — surface verbatim):
   `allow_agent_write` still gates whether a source accepts writes. Don't enumerate
   all of them from memory; discover them with `listTools` (or `/mcp`) and consult
   the handbook.
+  - **SharePoint writes need no ids** (since 2026-10, AV-2759). `microsoft_sharepoint_write`
+    (`create_folder`/`create_file`/`copy`), `microsoft_sharepoint_upload` and
+    `microsoft_sharepoint_delete` take site and library from the agent's writable
+    SharePoint source: `site_id`/`drive_id` are **optional** (only `action`, or
+    `file_name`+`content`, or `item_id`). `file_name` takes subfolders (`"TESTE/a.md"`).
+    With more than one SharePoint source, pass `datasource_name` (the source name); the
+    refusal names the candidates. A source name or `"Documentos"` passed where an id goes
+    is read as what it is, never sent to Graph; the source scope still bounds every write.
   - **`jira_mudar_status` walks the workflow.** Pass the DESTINATION status
     (`"CLOSED"`), not the next hop: when the workflow requires intermediate states
     it advances on its own while the next step is unambiguous, and returns the
