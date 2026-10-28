@@ -482,6 +482,11 @@ no model in the middle); for a JUDGEMENT
     exposes, with the space `id` the `native-databricks-genie-*` skills ask for.
   - `mcp__afl__list_organization_groups` — the org's groups (name → id), the input to
     `group_ids` in `create_agent`/`update_agent` **and** in `create_squad`/`update_squad`.
+  - `mcp__afl__list_organization_plugins` `{ organization_id? }` (scope `agents:read`, active
+    member only) — the org's **plugins** (e.g. `legal_research` = Pesquisa Jurídica): `status`
+    (`enabled` | `disabled` | `not_configured`), `detailRoute` (the screen where an org ADMIN turns
+    it on — no tool turns a plugin on), `enablesSkills` (platform skills whose `requires.plugin` is
+    that plugin) and `statusByKey` (`{ "legal_research": "enabled" }`). Read-only, no LLM.
   - `mcp__afl__get_organization_topology` (scope `agents:read`) — the org **graph**: who
     exists, in which group, and what is wired to what. This is the one that answers "which
     other agents live in this org" and "where does this resource actually live" — and, in
@@ -597,6 +602,47 @@ _meta: { toolCalls: [{ tool: "google_gmail_send", status: "ok", durationMs: 934 
 - Arguments that fail schema validation are rejected by the protocol **before** the
   handler, and that response has no `_meta` — there the problem is the call, not the
   execution.
+
+### Legal research — official legislation, case law and tracked lawsuits (organization plugin)
+
+Read tools (`tools:read`), exposed with their native names. Deterministic JSON, no model in the
+middle. **They require an ORGANIZATION agent as carrier** (`agentId`): the agent's organization
+must have the `legal_research` plugin enabled (check with `list_organization_plugins`) and the
+agent must have the `native-pesquisa-juridica` skill on. Otherwise the call is refused with a code
+and nothing is read: `LEGAL_RESEARCH_NOT_ORGANIZATIONAL_AGENT` (personal agent),
+`LEGAL_RESEARCH_PLUGIN_DISABLED` (an org admin must enable it under Plugins),
+`LEGAL_RESEARCH_SKILL_NOT_ENABLED`, `LEGAL_RESEARCH_ACCESS_CHECK_FAILED` (try again later).
+
+The corpus is the PLATFORM's (same for every org): federal legislation (Planalto, and the
+Senate's Technical Editions — Vade Mecum and codes — when Planalto is unavailable), São Paulo
+state legislation (Alesp, issuer `sp`), STF súmulas, STJ repetitive themes and judgments
+(acórdãos, CC-BY — credit "Fonte: STJ, Portal de Dados Abertos"), TST súmulas / OJs (by organ) /
+normative precedents, and TCU judgments.
+
+- `juridico_buscar_legislacao` `{ agentId, consulta, tipos?, vigente_apenas?, limite? }` —
+  exact citation (`"art. 5º, LXIII da CF"`, `"Lei 8.078/90"`, `"Lei estadual 10.177/1998"`) or
+  natural language. Exact citations come first (score 1). `vigente_apenas` defaults to `true`.
+  A law without qualifier is FEDERAL; say "estadual"/"de SP" for São Paulo.
+- `juridico_buscar_jurisprudencia` `{ agentId, consulta, tribunais?, tipos?, periodo?: { inicio, fim }, limite? }` —
+  `"Súmula 7/STJ"`, `"Súmula Vinculante 13"`, `"Tema 1234"`, `"Súmula 331 do TST"`,
+  `"OJ 394 da SBDI-1"`, `"PN 119"`, `"AgInt no REsp 1.234.567"`, `"Acórdão 2933/2026-TCU-Plenário"`
+  or a thesis in natural language. Without `tribunais`, the organization's default courts apply
+  (plus any court named in the query). Cancelled/overruled precedents come WITH their `validity`.
+- `juridico_ler_norma` `{ agentId, documento_id | urn, dispositivo? }` — the provision's text with
+  hierarchy, children and neighbours; without `dispositivo`, the summary and the article index.
+- `juridico_ler_decisao` `{ agentId, documento_id }` — the full decision / súmula / OJ.
+- `juridico_listar_processos` `{ agentId, apenas_com_novidade?, limite? }` and
+  `juridico_consultar_processo` `{ agentId, numero }` — lawsuits the ORGANIZATION tracks (CNJ
+  number registered by an org admin under Plugins › Pesquisa Jurídica), monitored from the CNJ
+  DataJud public API: summary + movements, `lastCheckedAt`, `notFound`/`lastError`. No parties and
+  no sealed cases (DataJud's public data). A number the org does not track returns
+  `outcome: "not_watched"` — there is no live lookup.
+
+Every hit carries `citation`, `unitLabel`, `officialUrl`, `validity` and `collectedAt`; text from a
+dated publication (Senate edition, TST book version) also carries `edition` — say which edition
+and "updated until". Search results carry `coverage`. **An empty result always has `emptyReason`**:
+`no_match`, `outside_coverage`, `corpus_not_ready` (retry later), `not_found`. Never fill the
+gap from memory, and treat the output as research support, not a lawyer's opinion.
 
 ### Write & action tools (Fase 3)
 
@@ -1930,6 +1976,13 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   turns a skill on for that agent; **`mcp__afl__disable_agent_skill`**
   `{ agent_id, agent_skill_id }` (`agents:write`) removes it — use the `agent_skill_id`
   from `list_agent_skills`, not the `skill_id`.
+  **Skill requirements:** a skill may declare `requires` (shown by `list_skills`/`get_skill`,
+  e.g. `{ "plugin": "legal_research", "scope": "organization" }` on `native-pesquisa-juridica`).
+  It only works on an **organization agent** whose org has that plugin **enabled**. Otherwise
+  `enable_agent_skill` is refused — `SKILL_REQUIRES_ORGANIZATION_AGENT` (personal agent),
+  `SKILL_REQUIRES_PLUGIN` (plugin not enabled) or `SKILL_REQUIREMENT_CHECK_UNAVAILABLE` (state
+  could not be read; nothing was enabled — retry). Check with `list_organization_plugins` first;
+  if the plugin is off, an org admin has to turn it on in Plugins (there is no tool for that).
 - **Reading `usageCount` correctly** — `list_agent_skills` returns `usageMeasurement`
   alongside `usageCount`/`lastUsedAt`, and you must read them together:
   `"executions"` means the number is real, so **`0` means never executed**;
