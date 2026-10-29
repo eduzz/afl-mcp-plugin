@@ -847,6 +847,17 @@ lacks it — surface verbatim):
   key/URL has no extension. Unsupported formats (e.g. `.xlsx`) are rejected — read the
   data with the integration's own tool and pass the text as `conteudo`. `op: "remover"`
   is destructive (goes through `confirm_action`).
+- **Save an important memory** → `gerenciar_documentos` `{ agentId, op: "memorizar",
+  lembrete: "<one self-contained sentence>" }`. The item is appended to the agent's single
+  "Memórias importantes" critical document, so every reminder shares **one** of the 3
+  prompt slots — never create one critical document per reminder with `adicionar` (each
+  new critical doc pushes the oldest one, e.g. the ChatGPT import, out of the prompt). The
+  result carries `itemCount`, `injected` and, when the document is created and evicts
+  another one, `displacedFromPrompt`. `CHAT_MEMORY_FULL` = the list hit its size cap
+  (~16 KB, or the document cap if lower); nothing was saved. `duplicate: true` = the item
+  was already in the list; nothing was saved. `critical: false` = the person switched the
+  list to smart mode: the item goes into it without taking a critical slot. Same write
+  permission as `adicionar`.
 - **Forget something about the person** → `gerenciar_documentos` `{ agentId, op: "esquecer",
   termos: ["…"] }` (1–5 literal terms, personal agent only). One call removes the term
   from every place memory keeps it for the token's user: chat notes (`agent_chat`),
@@ -1901,13 +1912,49 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   items omit absent fields entirely instead of asserting `null`.
   **`mcp__afl__create_skill`** (scope `skills:write`) — required `slug`
   (`^[a-z0-9][a-z0-9-]*$`), `name`, `description`, `type` (`prompt|tool|composite`);
-  optional `organization_id`, `category`, `prompt_injection`, `tool_definitions[]`,
-  `execution_config`, `parameters_schema`, `default_parameters`. Visibility is **derived
+  optional `organization_id`, `group_ids` (org skill only — see below), `category`,
+  `prompt_injection`, `tool_definitions[]`, `execution_config`, `parameters_schema`,
+  `default_parameters`. Visibility is **derived
   from the target org**: `organization_id` (or the org of an org-scoped token) → skill of
   that **organization** (caller must be a member); no org → **personal**. The response
   echoes `visibility` + `organizationId`. **`mcp__afl__update_skill`**
-  `{ skill_id, ... }` (`skills:write`) patches (slug/type/visibility are immutable);
+  `{ skill_id, group_ids?, ... }` (`skills:write`) patches (slug/type/visibility are immutable);
   **`mcp__afl__delete_skill`** `{ skill_id }` (`skills:write`).
+  - **Scoping an org skill to groups — `group_ids`.** `create_skill`/`update_skill` take
+    `group_ids` (resolve ids with `list_organization_groups`), **organization skills only**
+    (on a personal or platform skill it is refused). Same contract as an agent's `group_ids`:
+    **omitted = leave the scope alone; a list = the FINAL state (REPLACE, not append);
+    `[]` = the whole organization.** Org **admin/owner** may pick any group of the org; a
+    **group admin** only groups they administer and cannot leave the skill org-wide (`[]`). A
+    group that is not in the org is refused with a clear error, before anything is written.
+    On `create_skill` with `group_ids` **omitted** (same as the b2b screen): org admin/owner →
+    org-wide; a **group admin** who is not org admin/owner → the skill is born scoped to the
+    one group they administer, or, if they administer more than one, the call is refused
+    **before creating** asking for `group_ids`; a plain member keeps today's behavior.
+    `update_skill` with `group_ids` omitted never touches the scope.
+    **Re-scoping** (`update_skill` with `group_ids`): a group admin may only touch a skill whose
+    CURRENT groups are all groups they administer — an org-wide skill, or one that includes a
+    group they don't administer, is org-admin only (refused, nothing written).
+    The scope write is atomic: on `create_skill`, if the groups cannot be saved the creation is
+    **undone** and the call fails (`Skill NÃO criada…`) — nothing is left open to the whole org;
+    just retry. On `update_skill`, a failed group write leaves the previous scope in place and the
+    error says the groups did NOT change (other fields were saved).
+  - **Group scope is enforced on every path** (same rule as the AFL screen): `list_skills`,
+    `get_skill`, `list_skill_assets`, the agent skill picker and `enable_agent_skill`. A member
+    sees an org skill with no scope (or scoped to everyone) and the ones scoped to a group they
+    are an ACTIVE member of; org admin/owner and "all groups" members see all; a **group admin**
+    sees only the skills scoped to the groups they administer (not the org-wide ones — same as
+    the screen); the creator always sees their own. `get_skill` answers `skill not found` — the
+    same as for an id that does not exist. Org skills carry `groupIds` (`[]` = whole org; the
+    field is ABSENT when the scope could not be read — "unknown", never "whole org"). If the
+    scope cannot be evaluated, org skills are hidden (fail-closed). `list_skills` filters
+    **before** paging, so `total`/`hasMore` count only what you can see.
+  - **Linking a group-restricted skill to an agent.** `enable_agent_skill` (and re-enabling) is
+    refused with `SKILL_OUT_OF_GROUP_SCOPE` when the caller does not reach the skill.
+    `list_agent_skills` lists such a skill only as the link (`restrictedSkills: [{agentSkillId,
+    skillId, enabled, restricted:true}]`, no name/config) so you can still disable it. A skill
+    already enabled on an agent keeps working in that agent's turns for whoever uses the agent —
+    who uses the agent is governed by the agent's own sharing.
   - **Deleting is a SOFT delete, and the skill keeps its slug.** It becomes `isActive: false`,
     leaves the default `list_skills`, and `create_skill` with the same slug answers
     `already exists` (when you can manage it, the error names it: `... but is INACTIVE (id …)`).
