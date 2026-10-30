@@ -1194,6 +1194,13 @@ lacks it — surface verbatim):
   needs, so a default `agent` step never generated one; **1445** on an `agent` step),
   `maxRetries` 0–3, `retryDelaySeconds` 5–300. A step whose image was refused for lack of clock
   carries `imageRefusedForTime` (cause + what to adjust) in `get_squad_run`.
+  A **failed** step carries `output.failedResponse` — the agent's answer in the attempt that
+  failed (rejected by its `failureMarker`, or by a write the platform could not confirm). It is
+  in the step `output`, so it comes with `fields: "full"` or `step_key`/`step_id`, not in the
+  light status projection. It is **not delivery**: it never reached the child steps (`content`
+  stays delivery-only). Read it **before retrying** — it says what the attempt already did (the
+  card it created, the write Jira refused). Absent on a step that did not fail, or on runs
+  older than the field.
   The turn of an `agent` step is **asynchronous** (AV-2649): started, polled and cancellable,
   with no connection held — so it uses the configured `timeoutSeconds` in full, up to 1445s,
   answering inline. (Before, the inline turn was capped at 245s by the 270s HTTP leg, and only
@@ -1660,7 +1667,20 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
 - **Agents (org-aware)** — the CRUD tools route automatically between **personal**
   agents and **organization** agents (which live in the b2b service). `mcp__afl__get_agent`
   `{ agent_id }` (scope `agents:read`) returns the full config for either — for an org
-  agent it also carries `groups` (the groups it is linked to).
+  agent it also carries `groups` (the groups it is linked to). **The full config is only
+  for the agent's owner** — or, for an org agent, whoever can train or administer it.
+  Anyone else who can use the agent (a shared, public or subscribed agent, or an org
+  agent you can only *interact* with) gets its card (`id`, `name`, `description`,
+  avatar, `isActive`, `organizationId`, `configWithheld: true`; a personal agent's card also
+  carries its voice — `elevenLabsVoiceId`, `voiceProvider`, `voiceStability`,
+  `voiceSimilarityBoost`) — no `prompt`, no personality, no parameters. That is the same
+  rule the AFL screens apply:
+  `configWithheld: true` means "not yours to read", not "empty prompt". The owner of the
+  organization (its recorded owner) always counts as able to administer its agents;
+  its recorded admin counts only while they have no membership row there. A former
+  member (deactivated membership) never counts.
+  `update_agent` with `prompt_edits`/`prompt_append` on such a card is refused
+  for permission — nothing is written.
   **`mcp__afl__create_agent`** (scope `agents:write`): without `organization_id` it creates
   a **personal** agent (only `name` ≥3 chars required); with `organization_id` it creates an
   **org** agent (requires `name` + `prompt`, and the user must be **admin/owner** of the
