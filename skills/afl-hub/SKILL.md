@@ -988,7 +988,12 @@ lacks it — surface verbatim):
   `attempt`, same `status`). The run envelope's
   **`totalTokens`/`totalCost`** (USD) are the aggregate consumption, and they are
   updated **during** the run (including while it sits in `waiting_approval`), not
-  only at the end.
+  only at the end. They include **every round** of every step: a step reopened by a
+  review loop or a "Redo" carries **`previousRounds`** — per earlier round, its
+  `cost`/`tokens`, `failedAttempts` and `reopenedBy` (`kind: "review_loop"` with
+  `checkpointName`/`optionLabel`, or `"redo"`); `olderRoundsTotals` sums the oldest
+  ones. That is where a step costing far more than its siblings gets explained — the
+  reviewer's note and name are not exposed.
   A step still in flight also carries its **deadline and proof of life**, so you can
   tell working from stuck without guessing: `timeoutSeconds`/`maxAttempts` (the
   contract that run froze), `elapsedSeconds`, `heartbeatAt`/`heartbeatAgeSeconds`,
