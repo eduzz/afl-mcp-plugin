@@ -2541,6 +2541,10 @@ analysis. It is not optional flavor — it is what makes a scoped question hones
   Asking "quantos cards na sprint ativa?" *without* `source_filter` counts the
   ENTIRE board. Use `sprint in openSprints()`, `assignee = currentUser()`, and so on.
   The source's configured project filter is applied automatically on top.
+- **API source** (`api_endpoint`, GET only) — a JSON object that declares the calls:
+  `{"query":"path","period":{"start":"2026-10-01","end":"2026-10-31","step":"day","start_param":"…","end_param":"…"},"pagination":{"type":"page","param":"page"}}`.
+  The engine never guesses parameter names, and free text is refused. Read
+  `data.cobertura`: a partial result names what is missing and is not a total.
 
 `formato_saida: "documento"` produces an `.xlsx` with the complete result — use it
 whenever the answer must carry every record, not a sample.
