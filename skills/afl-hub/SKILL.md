@@ -636,7 +636,13 @@ normative precedents, and TCU judgments.
   number registered by an org admin under Plugins › Pesquisa Jurídica), monitored from the CNJ
   DataJud public API: summary + movements, `lastCheckedAt`, `notFound`/`lastError`. No parties and
   no sealed cases (DataJud's public data). A number the org does not track returns
-  `outcome: "not_watched"` — there is no live lookup.
+  `outcome: "not_watched"` — there is no live lookup. `juridico_consultar_processo` also brings
+  `publications`: what came out in the DJEN (official electronic gazette), with an excerpt.
+  `publications.checkedAt: null` means not read yet, never "no publications".
+- `juridico_ler_publicacao` `{ agentId, numero, publicacao_id, parte? }` — the full text of one DJEN
+  publication (the id comes from `juridico_consultar_processo`), in parts: read up to `totalDePartes`,
+  since the outcome is usually at the end. CPF, CNPJ and e-mail are masked by the platform. Only what
+  was published: petitions and expert reports are generally not there, and case files are not downloaded.
 
 Every hit carries `citation`, `unitLabel`, `officialUrl`, `validity` and `collectedAt`; text from a
 dated publication (Senate edition, TST book version) also carries `edition` — say which edition
