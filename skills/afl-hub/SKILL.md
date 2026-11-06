@@ -650,6 +650,46 @@ and "updated until". Search results carry `coverage`. **An empty result always h
 `no_match`, `outside_coverage`, `corpus_not_ready` (retry later), `not_found`. Never fill the
 gap from memory, and treat the output as research support, not a lawyer's opinion.
 
+### Basecamp — read and write an agent's Basecamp (agent-scoped)
+
+Exposed with their native names. **Every Basecamp tool requires the carrier agent** (`agentId`):
+the fence is the Basecamp data source linked TO THAT AGENT — its Basecamp account and the projects
+declared in it. A project outside the source is refused (`BASECAMP_PROJECT_OUT_OF_SCOPE`); an
+agent without a Basecamp source has no access. The token sees only what the connected Basecamp
+account sees.
+
+- `datasource_basecamp` `{ agentId, acao, projeto?, ... }` (`tools:read`) — live read, nothing
+  indexed. `acao`: `projetos`, `listas`, `tarefas` (`situacao`: abertas/atrasadas/concluidas/todas;
+  `responsavel`), `tarefa`, `mensagens`, `mensagem`, `comentarios`, `buscar` (`termo`), `agenda`
+  (`de`, `ate`), `documentos`, `arquivos` (`pasta`), `documento`, `cartoes` (`coluna`), `campfire`,
+  `pessoas`. Long answers come with `truncado: true` and say so — never conclude "that's all".
+- Writes (`tools:write`), all returning `pending_confirmation` from the hub — nothing is written
+  until you call `confirm_action` with the `confirmationId` (show the user the summary first):
+  `basecamp_tarefa` (`op`: criar/atualizar/concluir/reabrir/mover), `basecamp_comentar`,
+  `basecamp_publicar` (`destino`: mural/campfire), `basecamp_lista`, `basecamp_cartao`
+  (`op`: criar/mover), `basecamp_evento`, `basecamp_excluir` (to the project's trash, recoverable).
+  The summary says which Basecamp account will write ("Vai sair como …"), lists everything that
+  will be written (assignees, participants, mentions, due date, notification) and warns when the
+  project's CLIENT will see it. **Over the hub, YOU are the confirming party:** `confirm_action`
+  is the human's yes, so call it only after the user approved that exact summary — above all for
+  `basecamp_excluir` and anything the client sees. Never confirm on your own judgement.
+  `basecamp_tarefa` `criar` without `lista` (or with the board name, "To-dos") puts the to-do
+  straight on the project's To-dos board (Basecamp 5).
+- In a squad step or automation, writing where the project's CLIENT sees needs the structured
+  switch `basecampClientVisible: true` in that step's `config` (or in the `chat_with_agent`
+  action) — the instruction text never unlocks it (`BASECAMP_CLIENT_VISIBLE_NEEDS_CONSENT`).
+- `"@Nome"` in a text becomes a real Basecamp mention of a project person; an ambiguous name is
+  refused with the options (`BASECAMP_MENTION_NOT_RESOLVED`).
+- On an ORGANIZATION connection the written text gets the footer "— via AFL, a pedido de …";
+  don't add one yourself.
+- Refusals with a code, nothing written: `BASECAMP_PROJECT_ARCHIVED` (archived project — reading
+  still works), `BASECAMP_EDIT_NEEDS_READ` (the agent's link is "write only": it can only create
+  to-dos, comment and post), `BASECAMP_RECONNECT_REQUIRED`, `BASECAMP_TEMPORARILY_UNAVAILABLE`,
+  `BASECAMP_PERMISSION_DENIED`, `BASECAMP_DELETE_TYPE_NOT_ALLOWED` (`basecamp_excluir` only trashes
+  content items — to-do, list, comment, message, document, file, event, card; a project tool such as
+  the message board, the To-dos board, the schedule, Campfire, the card table, or a folder is
+  refused before any confirmation).
+
 ### Write & action tools (Fase 3)
 
 The hub is **no longer read-only**. Beyond the reads above there are now write and
@@ -2162,7 +2202,7 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   `notion_page`, `notion_database`, `slack_channel`, `slack_data`, `databricks_table`,
   `databricks_genie`, `github_repo`, `api_endpoint`, `webhook`, `database_table`,
   `web_scraping`, `mcp_server`, `hubspot_data`, `linkedin_data`, `microsoft_365_data`,
-  `tuya_devices`, `whatsapp_data`, `jira_data`, `education_platform`, `meta_ads_data`.
+  `tuya_devices`, `whatsapp_data`, `jira_data`, `education_platform`, `meta_ads_data`, `basecamp_data`.
   Aliases (`jira`,
   `notion`, `databricks`, `postgres`, `sqlserver`, `sheets`, `mcp`, …) are normalized, and an
   unrecognized type is **refused listing the valid ones** rather than silently accepted.
