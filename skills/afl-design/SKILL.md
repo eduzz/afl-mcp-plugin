@@ -32,7 +32,8 @@ guidance you are tempted to write here belongs there, and this file stays a poin
 2. **Follow the plan it returns.** It carries the doctrine for that type and names the execution
    tool per step. Never invent a step it did not name, nor answer the design question from memory.
 3. **Execute with the tools from `afl-hub`** (signatures, return shapes, parameter traps).
-   Porting something that already runs elsewhere? Read **`afl-migrate`** first.
+   Porting something that already runs elsewhere? Read **`afl-migrate`** first. A step that only
+   repeats the same reads and checks totals is a deterministic step: **`afl-recipe`**.
 
 ## Four things that only apply to an MCP client
 

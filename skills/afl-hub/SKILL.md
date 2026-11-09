@@ -360,6 +360,19 @@ no model in the middle); for a JUDGEMENT
     `data.reason: 'conta_ambigua'` listing the sources by name — call again with
     `fonte: "<source name>"` (every `notion_*` tool takes it), or ask the user which
     source. Never ask the user for ids.
+    **Notion connection in "each person's login" (`login de cada pessoa`):** reads and writes use
+    the Notion account of the person behind the token, and only reach what that person shared
+    when connecting. `notion_pages_create`, `notion_database_create_entry`, `notion_pages_delete`
+    and `notion_database_delete_entry` then answer `pending_confirmation` with a `confirmationId`
+    — **nothing was created or archived until you call `confirm_action`** with it, as the same
+    person (anyone else is refused). The target is re-checked on confirm: lost access answers
+    `acesso_pagina_perdido`, a parent the person never shared answers `pagina_nao_compartilhada`
+    before any confirmation. Several pages/entries under the same parent go in ONE call with
+    `itens` (up to 25, one confirmation). Editing (`notion_pages_update`,
+    `notion_database_update_entry`) needs no confirmation. With an organization API key (no
+    person behind it) creating uses the account of whoever signed the configuration and deleting
+    is refused (`sem_humano_para_confirmar`). On a service-account connection nothing changes:
+    writes run directly, with no confirmation.
   - `mcp__afl__whatsapp_messages_analyze` `{ agentId, analysis_type?, phone?, days?,
     max_results?, include_content?, datasource_name? }` — WhatsApp history, **no model
     in the middle** (SQL over the messages the Evolution webhook persists in real
@@ -714,10 +727,51 @@ lacks it — surface verbatim):
     (`create_folder`/`create_file`/`copy`), `microsoft_sharepoint_upload` and
     `microsoft_sharepoint_delete` take site and library from the agent's writable
     SharePoint source: `site_id`/`drive_id` are **optional** (only `action`, or
-    `file_name`+`content`, or `item_id`). `file_name` takes subfolders (`"TESTE/a.md"`).
+    `file_name`+`content`, or `item_id`). `file_name` takes subfolders, read from the
+    library root as the listing shows them (`"/Source folder/TESTE/a.md"`). On a source
+    limited to folders, a relative path works only when its first folder already exists in
+    the destination (`"TESTE/a.md"`); otherwise it is refused with the absolute path ready to
+    use, so a NEW subfolder goes by the absolute path. The library name is not part of the
+    path, and `..` never leaves the source (encoded or not).
     With more than one SharePoint source, pass `datasource_name` (the source name); the
     refusal names the candidates. A source name or `"Documentos"` passed where an id goes
     is read as what it is, never sent to Graph; the source scope still bounds every write.
+  - **Outlook meetings: the full CRUD** (since 2026-11, AV-2863). `microsoft_calendar_read`
+    returns everything Outlook shows per event — `categories`, `type`
+    (singleInstance/seriesMaster/occurrence/exception) + `seriesMasterId`, the series rule
+    as text, `sensitivity`, `showAs`, `isCancelled`, the Teams link, `isOrganizer`, and
+    each attendee with `type` (required/optional/resource) and `response`. Filter by the
+    Outlook **category** (`category`), never by a tag in the title; `list_occurrences`
+    (series or occurrence id) lists a series' dates, `list_categories` the categories
+    USED in a period (no colour). `microsoft_calendar_create` takes `categories`,
+    `attendees` + `optional_attendees` and a `recurrence` object (`frequency`, `interval`,
+    `days_of_week`, `day_of_month`, `week_of_month`, `month` and exactly ONE end:
+    `end_date` | `occurrences` | `no_end`) — a malformed one is refused with
+    `OUTLOOK_RECURRENCE_INVALID` and nothing is created. `microsoft_calendar_update`
+    (now on the hub) changes attendees **by difference** — `add_attendees`,
+    `add_optional_attendees`, `remove_attendees`; `replace_attendees` only when the whole
+    list must go — and, on an occurrence id, `scope`: `occurrence` | `this_and_following`
+    (the series ends the day before and a continuation is created; the result returns
+    both ids) | `series`. `microsoft_calendar_cancel` cancels a meeting YOU organized and
+    notifies attendees with `comment`. It needs the agent's delete permission for the Outlook
+    calendar, like `microsoft_calendar_delete`, and **never runs on the call**: it returns
+    `pending_confirmation` with a `confirmationId` and a summary naming the meeting and the
+    scope. Show it to the person, and nothing is cancelled until `confirm_action`. If that
+    answers `OUTLOOK_RESULT_UNKNOWN` or `OUTLOOK_CANCEL_UNCERTAIN`, the outcome is unknown and
+    attendees may have been notified: check with `microsoft_calendar_read`, do not retry
+    blindly. Someone else's meeting is refused (`OUTLOOK_CANCEL_NOT_ORGANIZER`) — decline it with
+    `microsoft_calendar_respond` (`accept`|`tentative`|`decline`, `comment`,
+    `send_response`, `proposed_start_datetime`/`proposed_end_datetime`, `scope`).
+    **All-day events are dates, with no time zone:** pass `is_all_day` with `start_datetime`
+    as the first day and `end_datetime` as the day AFTER the last (one day: `2026-11-05` and
+    `2026-11-06`); reads return `startTime`, an exclusive `endTime` and `lastDay`. If a
+    series date can't be determined safely, `OUTLOOK_ALL_DAY_DATE_UNKNOWN` refuses
+    `this_and_following` before any write. Changing `body` keeps the Teams invitation
+    (`OUTLOOK_TEAMS_BLOCK_NOT_FOUND` if it can't), and a continuation does not carry the
+    series' attachments (`attachmentsNotCopied`).
+    `microsoft_calendar_delete` removes WITHOUT notifying anyone and refuses your own
+    meeting with attendees (`OUTLOOK_DELETE_WOULD_NOTIFY_ATTENDEES`); its old
+    `send_notifications` param is gone.
   - **`jira_mudar_status` walks the workflow.** Pass the DESTINATION status
     (`"CLOSED"`), not the next hop: when the workflow requires intermediate states
     it advances on its own while the next step is unambiguous, and returns the
@@ -938,16 +992,37 @@ lacks it — surface verbatim):
   by hand), `slides[]` for pptx.
 - **PPTX specifics** (`criar_documento` `formato: "pptx"`) — a slide is
   `{ titulo, conteudo, notas?, bullets?, colunas?: [{ titulo, conteudo }], tabela?,
-  grafico?, layout? }`. Three traps worth knowing:
+  grafico?, graficos?, cartoes?, layout? }`. Traps worth knowing:
   - The slide's `conteudo` **coexists** with `bullets`, `tabela` and `grafico` (the
     text renders above the element) — you do not have to choose one.
   - `layout` accepts `capa | secao | conteudo | duas_colunas | imagem | imagem_texto
-    | imagem_fundo | citacao | tabela | grafico | encerramento`. Anything outside
+    | imagem_fundo | citacao | tabela | grafico | dois_graficos | cartoes |
+    encerramento`. Anything outside
     that list is **ignored without error** and the layout is inferred from the
     fields you filled — so a typo reads as "the layout parameter did nothing".
   - `incluir_capa` (default `true`) generates a cover from `titulo`. Pass `false`
     when your **first slide already is the cover**, otherwise the deck ships with
     two covers in a row and every slide number is off by one.
+  - **Indicator cards**: `layout: "cartoes"` with `cartoes: [{ rotulo, valor,
+    variacao?, tendencia?: "alta" | "queda" | "neutro", detalhe? }]`, 1 to 8 per
+    slide. `valor` and `variacao` are text you already formatted (the tool never
+    computes or formats numbers). The variation color comes only from `tendencia`;
+    without it the color is neutral, never inferred from the sign.
+  - **Several series**: `grafico: { tipo, labels, series: [{ nome, valores }] }`
+    instead of `valores`. **Two charts**: `layout: "dois_graficos"` with
+    `graficos: [spec, spec]` (exactly 2, each with its own `titulo`).
+  - **Chart options** (`grafico.opcoes`, PPTX only, all optional): `mostrar_valores`,
+    `legenda` (`inferior | superior | direita | esquerda | oculta`), `formato`
+    (`inteiro | decimal | moeda | percentual`; `percentual` reads percentage points,
+    76.09 renders 76,1%), `tamanho_valores`. Bar/line only: `grade`, `eixo_categorias`,
+    `eixo_valores`, `min`, `max`, `rotacao_rotulos`, `tamanho_eixos`,
+    `ocultar_eixo_valores`. Bar only: `orientacao` (`vertical | horizontal`),
+    `agrupamento` (`lado_a_lado | empilhado | percentual`). Line only: `suavizar`,
+    `marcadores`, `espessura_linha` (1 to 6). Pie/doughnut only: `mostrar_percentual`.
+    An unknown option, or one the chart type does not draw, **fails the call**.
+  - An inconsistent spec **fails the call** and the error names the slide: a series
+    whose length differs from `labels`, a non-numeric value, more than one series in
+    `pie`/`doughnut`, more than 8 cards, or a field the layout would not draw.
   Use `design: "manual"` when you built rich slides yourself — it renders exactly
   what you sent and skips the AI layout pass (`"auto"`, the default, is slower).
 - **Brand the deck instead of shipping a generic one** — `marca: { base?,
@@ -1075,7 +1150,8 @@ lacks it — surface verbatim):
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
   (scope `squads:write`) creates a squad (DAG of steps): pass `name`, `steps[]` and
   `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`).
-  A step's `type` is one of **five**, and each one needs a **different `config`** —
+  A step's `type` is one of **six** (the sixth, `recipe`, is a deterministic read-only step with no
+  LLM, behind `SQUAD_RECIPE_STEPS`; its contract is in the **`afl-recipe`** skill), and each one needs a **different `config`** —
   an incomplete `config` fails the whole DAG, so get it right up front:
   `agent` → `{ agentId, instructions?, readOnly?, failureMarker?, pageConformance? }` ·
   `automation` → `{ automationId }` ·
@@ -1863,12 +1939,18 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
     cost_center <uuid>`), that uuid is **neither the organization nor the user** — it is a
     cost center, and this block is what resolves it. Each entry in `costCenters.visible[]`
     carries `id`, `name`, `limits` (**`monthlyCostLimitBrl`**, `monthlyTokenLimit`,
-    `dailyRequestLimit`), `usage` (`currentMonthCostUsd`, **`currentMonthCostBrl`**,
-    `currentMonthTokens`, `currentDayRequests`), `usagePercentOfCostLimit`, `appliesToYou`,
-    `assignedTo` (groups and users) and, decisively, **`blocking`**, **`exhausted[]`** plus
+    `dailyRequestLimit`), `appliesToYou` and, decisively, **`blocking`**, **`exhausted[]`** plus
     **`undecidable[]`** — which dimension ran out (`monthly_cost` | `monthly_tokens` |
     `daily_requests`). Raising a *different* ceiling (the account's, the plan's) does not
     unblock this one; say which dimension to raise.
+    - **Spend is for those who administer the org.** With **`costCenters.usageVisible: true`**
+      an entry also carries `usage` (`currentMonthCostUsd`, **`currentMonthCostBrl`**,
+      `currentMonthTokens`, `currentDayRequests`), `usagePercentOfCostLimit`, `usdBrlRate` and
+      `assignedTo` (groups and users). With `false` (a plain member, or the check could not be
+      made) those fields are `null` beside `numbersWithheld: true`, here and in
+      `organizationLimit.entry`, and that `null` does **not** mean "no exchange rate". The verdict
+      still ships, so a member can tell which dimension refused and whom to ask. Never estimate
+      the withheld numbers.
     - **Two currencies, both declared (migration 0267).** The ceiling is quoted in
       **BRL** — that is the currency the customer contracts it in, and the `Brl` suffix in
       the name is the contract. Spend is metered in **USD**, because that is what Bedrock
@@ -2233,7 +2315,8 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     channels): no selection — it covers past and future meetings and is read **live**
     (sync/reindex answer "lida ao vivo"). It exists **only as a personal source**: on an
     organization it is refused with `TEAMS_MEETINGS_PERSONAL_ONLY`. The agent reads it with
-    `microsoft_teams_meetings_read`; an account connected before needs "Liberar reuniões"
+    `microsoft_teams_meetings_read` (each meeting carries its Outlook `categories` and
+    `seriesMasterId`; `category` filters the list); an account connected before needs "Liberar reuniões"
     (incremental Microsoft consent): on the account card in Integrações → Microsoft 365
     (`/integracoes/microsoft-365`, Contas tab) — the path for a source created through the
     hub — or in the source screen.
@@ -2890,6 +2973,8 @@ still answered "App atualizado".
   report the app as done; re-ask saying *where* the image goes.
 
 ## Changing an app's look — `tema`
+
+**`tipo: 'squad'` capacity (organization apps only, never public).** Freezes one squad: `squad` (name), `passo_do_arquivo` (the step that delivers the file) and `parametros`/`fixos` named exactly like the squad's `triggerSchema` fields (every required field covered, an unknown field is refused). The page uses `afl.squad.start/status/download`, and the file is downloaded by the shell. The app's payer pays, not whoever clicked. Requires the `APP_SQUAD_ACTIONS` flag.
 
 `criar_app_web` and `editar_app_web` both take **`tema`** `{ modo, cor_primaria?, fonte? }`.
 It is already in the `inputSchema` your client sees — the hub derives that schema from its
