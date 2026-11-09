@@ -479,7 +479,7 @@ no model in the middle); for a JUDGEMENT
   - `mcp__afl__list_source_types` — the closed catalog of `source_type`, with aliases,
     which types need an `integration_uuid` and the config each one requires.
   - `mcp__afl__list_genie_spaces` — the Databricks Genie spaces the connected workspace
-    exposes, with the space `id` the `native-databricks-genie-*` skills ask for.
+    exposes, with the space `id` that goes in a `databricks_genie` source's `config.genieSpaceId`.
   - `mcp__afl__list_organization_groups` — the org's groups (name → id), the input to
     `group_ids` in `create_agent`/`update_agent` **and** in `create_squad`/`update_squad`.
   - `mcp__afl__list_organization_plugins` `{ organization_id? }` (scope `agents:read`, active
@@ -2280,17 +2280,15 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     accepted and then **refuses to read at runtime** — declaring nothing would hand the
     agent the whole workspace under the service principal's credential. Writing has no path
     at all: `INSERT`/`UPDATE`/DDL are refused even with `allow_agent_write: true`.
-  - **`databricks_genie` is the exception that is NOT a data source.** It *is* a valid
-    `sourceType`, so the call is **ACCEPTED** — and it **enables nothing**: asking Genie a
-    question is a **platform SKILL** capability (`native-databricks-genie-*`) over the
-    organization's Databricks integration, not a source capability. The trap is that the
-    accepted-and-inert source looks exactly like a working one. The chain that actually works:
+  - **`databricks_genie` is the data source that lets an agent ask Genie.** The space goes
+    in `config`: `{ genieSpaceId, genieSpaceTitle? }`. Connected to the agent, the source
+    gives it `datasource_databricks_genie`. The chain that works:
     `list_integrations { integration_type: "databricks" }` (get the workspace) →
     **`mcp__afl__list_genie_spaces`** `{ organization_id?, integration_uuid? }`
-    (`datasources:read`) → `list_skills { search: "genie" }` → `enable_agent_skill` on the
-    carrier agent. The space `id` `list_genie_spaces` returns (32 hex chars) is what the
-    skill asks for — it is **not** an `integration_uuid` and is not used in
-    `create_data_source`.
+    (`datasources:read`) → `create_data_source` with the space `id` (32 hex chars, **not** an
+    `integration_uuid`) in `config.genieSpaceId` → `connect_agent_data_source` on the carrier
+    agent. The `native-databricks-genie-*` skills do **not** replace the source: with a skill
+    and no linked Genie source, the question is refused with `genie_sem_fonte`.
   - **`list_genie_spaces` separates four facts that used to arrive as the same silence.**
     An **empty list** means Databricks answered and there are no spaces the service
     principal can see (the integration exists and is valid — a workspace permission

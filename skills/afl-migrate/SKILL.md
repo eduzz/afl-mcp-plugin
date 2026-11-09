@@ -172,8 +172,8 @@ whether this month counts — fires 12× a year for the 3 that matter.
 operates it.** It may be a data source, a native skill with parameters, or nothing.
 
 The case that proves it: two ported agents carried the rule "always consult the metadata
-catalog before writing a query". In AFL, Databricks is **not a data source** — it is a
-native skill (`native-databricks-genie-perguntar`) configured with a `genieSpaceId`, and
+catalog before writing a query". In AFL, Genie is a `databricks_genie` data source
+linked to the agent, with the space in `config.genieSpaceId`, and
 Genie takes natural language. There is no catalog to consult, and the discipline
 *inverts*: the rule that matters becomes **do not rewrite the question** before sending it
 (`rawQuestionPassthrough` defaults to on), because the intermediate rewrite is where the
