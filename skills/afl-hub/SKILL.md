@@ -493,6 +493,15 @@ no model in the middle); for a JUDGEMENT
     which types need an `integration_uuid` and the config each one requires.
   - `mcp__afl__list_genie_spaces` — the Databricks Genie spaces the connected workspace
     exposes, with the space `id` that goes in a `databricks_genie` source's `config.genieSpaceId`.
+  - `mcp__afl__list_microsoft_locations` `{ integration_uuid, kind, query?, site_id?, team_id? }`
+    — WHERE a Microsoft 365 source reads (AV-2897): `kind` `sharepoint_sites` (with `query`,
+    e.g. the site name from the URL) → sites with the Graph `siteId` ("host,guid,guid") and
+    `webUrl`; `sharepoint_drives` (with `site_id`) → libraries; `teams` → teams;
+    `teams_channels` (with `team_id`) → channels. Libraries and channels come with a ready
+    `selectedItem` for `config.selectedItems`. The account is the integration's: personal if
+    it is yours, the org's if it is the org's (active membership AND admin/owner role, the same as creating an org source). At most 50 items:
+    `total` says how many exist and `truncated: true` says the list was cut — narrow it with
+    `query` (or ask the person) instead of concluding the site does not exist.
   - `mcp__afl__list_organization_groups` — the org's groups (name → id), the input to
     `group_ids` in `create_agent`/`update_agent` **and** in `create_squad`/`update_squad`.
   - `mcp__afl__list_organization_plugins` `{ organization_id? }` (scope `agents:read`, active
@@ -1622,8 +1631,8 @@ lacks it — surface verbatim):
   - **`mcp__afl__get_automation`** `{ automation_id }` (`automations:read`) — the
     **DEFINITION**: name, description, frequency (plus `custom_schedule_*` when it is
     `custom`), the analysed sources, the analysing agent,
-    `analysis_type`/`analysis_custom_prompt`, `conditions_logic` + `conditions[]`,
-    `actions[]`, `is_active` and the spend cap. Read it **before** `update_automation`,
+    `analysis_type`/`analysis_custom_prompt`, `conditions_logic` + `condition_groups[]` +
+    `conditions[]`, `actions[]`, `is_active` and the spend cap. Read it **before** `update_automation`,
     which is a partial patch: without it you do not know what you are preserving.
   - **`mcp__afl__create_automation`** (`automations:write`) — creates it and returns the
     `id` (the same one a squad's `automation` step takes in `config.automationId`).
@@ -1647,7 +1656,30 @@ lacks it — surface verbatim):
   Fields accepted by create/update: `name`, `description`, `frequency`,
   `custom_schedule_days`, `custom_schedule_time`, `data_source_id`, `data_source_ids`,
   `personal_agent_id`, `analysis_type`, `analysis_custom_prompt`, `conditions_logic`,
-  `conditions[]`, `actions[]`, `is_active`, `monthly_cost_limit_brl`. Three are
+  `condition_groups[]`, `conditions[]`, `actions[]`, `is_active`, `monthly_cost_limit_brl`.
+
+  **The rule is plain boolean logic (AV-1353).** `conditions_logic` is the ROOT (`AND` = all,
+  `OR` = any); `condition_groups[]` are the parentheses, at most 2 levels below the root:
+  `{ id, parentGroupId?, logic }`, and a condition joins a group by `groupId`. `(A AND B) OR C`
+  = `conditions_logic: "OR"` + `condition_groups: [{ id: "g1", logic: "AND" }]` + A and B with
+  `groupId: "g1"` + C with no `groupId`. Each action is an independent **IF ‹target› THEN
+  ‹action›**: no link → it fires when the WHOLE rule holds; `conditionId` or `conditionGroupId`
+  → it fires when THAT target holds, even if the whole rule does not (partial firing) — never
+  both. Ids of conditions and groups in the payload are **local** (you pick them; the server
+  swaps in the definitive ones, an id the automation already has is kept). Refusals are **400
+  with a code**, never 500: `ITEM_DA_REGRA_INVALIDO` (an item that is not an object),
+  `ALVO_DA_ACAO_INEXISTENTE` (action links outside the rule),
+  `GRUPO_VAZIO`, `GRUPO_EM_CICLO`, `PROFUNDIDADE_EXCEDIDA`, `ID_DUPLICADO`,
+  `ACAO_COM_DOIS_ALVOS`, `ALVO_DA_ACAO_DESATIVADO` (an action pointing to a turned-off condition, or
+  a group with no active condition, would never fire), `REGRA_GRANDE_DEMAIS` (over 20 groups, 50
+  conditions or 50 actions). Deleting a condition that still has linked actions is also refused.
+  Group items take `parent_group_id`/`group_order` (camelCase also accepted). Sending
+  `conditions` without `condition_groups` keeps the current groups the conditions still cite
+  (`groupId`) and drops only the ones left empty — an action still pointing to a dropped group
+  is a 400, never a silent flattening. With partial firing, the LLM analysis also runs when the
+  whole rule fails but some action's own target holds (that action delivers the analysis); a true
+  rule with no eligible action is `skipped`, with no analysis. The
+  execution history lists the actions the rule skipped with `skipped: true` and the reason. Three are
   **required on create only** (`name`, `frequency`, `data_source_id`) and `is_active`
   **changes meaning** between the two (on create the default follows the key — see below;
   "leave it alone" when omitted on update) — which is why the two schemas are not one object.
@@ -1706,6 +1738,12 @@ lacks it — surface verbatim):
   sent.** That is what separates "written" from "accepted and dropped": when the echo is
   your own input, a write lost along the way looks like it worked. Read the echo before
   claiming the change took.
+
+  **`get_automation_result` can show runs that analyzed nothing.** A run with
+  `skipReason: "data_unchanged"` was skipped because the source had not changed, so no
+  analysis happened and nothing was charged. When all the rows are like that, the last real
+  execution comes at the end of the list (and it is older than the ones before it). Report
+  "no new data since <that run>", not "it stopped working".
 
   **`get_automation` (definition) ≠ `get_automation_result` (history) — the old name
   does not help.** One answers *what the automation IS*, the other *what it DID*. The
@@ -2310,16 +2348,35 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     that already names the service (`onedrive`, `outlook_calendar`) fills in a missing
     `serviceType` and completes a bare `"outlook"`: `outlook_calendar` +
     `{ "serviceType": "outlook" }` is the calendar, not the mailbox.
+    **SharePoint and Teams channels need the SCOPE** (AV-2897), or the source is **refused**:
+    SharePoint → `config.selectedItems: [{ id: <driveId>, type: "folder", extra: { siteId:
+    <Graph site id>, subType: "drives" } }]` — the site URL is **not** the site id; Teams
+    channels → `[{ id: <channelId>, type: "channel", extra: { teamId } }]` (one channel per
+    source). Get them from `list_microsoft_locations`; before, such a source was created
+    "Active" and the agent read nothing.
     `teams_meetings` (AV-2757) is the person's **Teams meetings and their transcripts**
     (canonical pair `serviceType: "teams"` + `teamsType: "meetings"`; plain `teams` stays
     channels): no selection — it covers past and future meetings and is read **live**
     (sync/reindex answer "lida ao vivo"). It exists **only as a personal source**: on an
     organization it is refused with `TEAMS_MEETINGS_PERSONAL_ONLY`. The agent reads it with
-    `microsoft_teams_meetings_read` (each meeting carries its Outlook `categories` and
-    `seriesMasterId`; `category` filters the list); an account connected before needs "Liberar reuniões"
-    (incremental Microsoft consent): on the account card in Integrações → Microsoft 365
-    (`/integracoes/microsoft-365`, Contas tab) — the path for a source created through the
-    hub — or in the source screen.
+    `microsoft_teams_meetings_read` (AV-2889): `get_transcript` finds AND reads in one call —
+    by `title` (accent/case/word order don't matter), `participant` and the period, or by the
+    short `meeting_ref` (`20261020-a3f9c2`) a list returned; one match comes back read (with
+    duration, speakers, invitees and real attendance), several come back as options to **ask**
+    the person, none says the window read and whether the calendar was cut. Sessions of ONE
+    recurring series are not "different meetings": the latest session with a transcript comes
+    back read, with the other sessions listed (each with its `meeting_ref`). A long transcript
+    comes in parts: the cut notice gives the `from_time` to call again with the same
+    `meeting_ref`. The long event id
+    never reaches the model (a mistyped `meeting_ref` reads nothing, never the neighbour).
+    `list_meetings` browses (same filters plus Outlook `category`; it says when more meetings
+    exist than it shows). An account connected before needs "Liberar reuniões" (incremental
+    Microsoft consent) and, separately, "Liberar presença" for attendance (usually the tenant
+    admin approves; without it the minutes come from the transcript alone): both on the account
+    card in Integrações → Microsoft 365 (`/integracoes/microsoft-365`, Contas tab) — the path for
+    a source created through the hub. Calls without a calendar event ("Reunir agora", 1:1,
+    group) are not readable with the person's login (Microsoft offers that list only to
+    tenant-wide apps): the agent says so, never that the call does not exist.
   - **`meta_ads_data` requires `integration_uuid` AND a non-empty `adAccountIds`.**
     One Meta login sees N Business Managers × N ad accounts, so a source that does not
     declare which accounts it covers would read every account the person can see. An
@@ -3094,6 +3151,18 @@ Google source linked to the agent, and accept an optional `accountId`. An agent 
 sources of that service live in different Google accounts must pass it — without it the
 call is refused (`reason: "conta_ambigua"`) with the `accountId` of each source listed,
 never routed to the first source. An `accountId` outside the linked sources is refused.
+
+**"No data source linked" names the agents that have one (AV-2923).** When the `agentId` you
+passed has no source of that service, the Google tools (`google_gmail_*`, `google_calendar_*`,
+`google_drive_*`, `google_sheets_*`) and the Microsoft ones (`microsoft_mail_*`,
+`microsoft_calendar_*`, `microsoft_onedrive_*`, `microsoft_sharepoint_*`) refuse with
+"Integração <X> sem fonte de dados associada", and the refusal is JSON with
+`outcome: "not_applicable"` plus `agentsWithSource: [{ id, name }]` — the agents **you can
+reach** that do have such a source. Repeat the call with one of those `agentId`s. An empty list
+means no agent you reach has the source: don't retry, and don't switch to another tool (or
+`scrape_webpage`) to get around it — the person has to link a source. With
+`agentsWithSourceTruncated: true` the list is partial (at most 10 are confirmed): check the
+others with `list_agents`.
 
 ## Generators you drive through the agent, not directly
 
