@@ -5,10 +5,12 @@ description: >-
   talk to AFL agents, read data connected to them (Jira, HubSpot, Notion,
   knowledge base, databases), write/act through them (create/edit records, with
   confirmation for destructive ops), manage your agents and skills (create/edit/delete,
-  put an org agent in a group, and enable/disable a skill on an agent), create/run/delete
+  put an org agent in a group, enable/disable a skill on an agent, and share a personal
+  agent with another person — invite, accept, change level, revoke), create/run/delete
   squads, delete data sources, groups, MCP connections and knowledge documents,
   create/read/edit/delete/run automations, and delegate a bigger setup to the
-  configuration architect (start/poll/answer/approve a run). Use
+  configuration architect (start/poll/answer/approve a run, or drive it yourself on the
+  client engine). Use
   whenever the user wants to ask/act through their AFL agents, search an AFL
   agent's knowledge base, look up or mutate Jira/HubSpot/Notion or database data
   that lives in AFL, create/edit an agent or a skill, create/trigger a squad,
@@ -38,6 +40,11 @@ here for the signatures.
 
 1. **`mcp__afl__list_agents`** (no args) → returns
    `{ agents: [{ id, name, description, capabilitySummary, dataSources }] }`.
+   Optional filters, as on the "My agents" screen (AV-3033): `category`, `level`
+   (`basico|pro|premium|gestao`) and `sort_by` (`recent` | `name`). Personal agents carry
+   `level`/`category` when set. Org agents have neither, so a `category`/`level` filter
+   EXCLUDES them and the response says so in `filtersApplied.organizationAgentsExcluded`
+   — never read that as "no org agents".
 2. **Pick the agent by what it is CONNECTED to, not by its name.** `dataSources`
    lists each connected source as `{ name, sourceType, allowAgentWrite }`, and Jira
    sources also carry `jiraProjects` — the project keys that source is scoped to.
@@ -293,7 +300,7 @@ no model in the middle); for a JUDGEMENT
     `hubspot_crm_files`, `notion_pages_export`, `google_gmail_read`,
     `google_calendar_read`, `google_drive_read`, `google_sheets_read`,
     `google_analytics_read` (GA4, read-only — see the GA4 source under "Manage data sources"),
-    `microsoft_mail_read`, `microsoft_calendar_read`, `microsoft_onedrive_read`,
+    `microsoft_mail_read`, `microsoft_calendar_read`, `microsoft_calendar_availability`, `microsoft_tasks_read`, `microsoft_onedrive_read`,
     `microsoft_sharepoint_scan`, `microsoft_sharepoint_document`, `github_search`,
     `datasource_notion` (reads a configured Notion SOURCE — database/page — by `name`/`id`;
     read-only: it has no `op`, and writing to Notion goes through `notion_pages_*` /
@@ -377,8 +384,13 @@ no model in the middle); for a JUDGEMENT
     max_results?, include_content?, datasource_name? }` — WhatsApp history, **no model
     in the middle** (SQL over the messages the Evolution webhook persists in real
     time). `analysis_type` is `contact_history` (needs `phone`) | `summary` |
-    `top_contacts` | `recent_messages` | `daily_stats`; `days` defaults to 7 — raise it
-    to reach older conversations. Covers contacts AND groups. **There is no sync
+    `top_contacts` | `recent_messages` | `daily_stats` | `unanswered`; `days` defaults to 7 — raise it
+    to reach older conversations. `unanswered` (AV-3013) lists the conversations that are
+    **without service right now** — the same badge as the screen's inbox — whose last
+    inbound message is inside `days`, with the `motivo` (`fora_do_escopo_das_fontes`,
+    `fontes_sem_agente`, `resposta_pendente_de_aprovacao`, `entrega_falhou`, …) and
+    `last_direction` (`inbound` = the contact spoke last). An empty list is a real answer;
+    a tool error is "could not read", never "none". Covers contacts AND groups. **There is no sync
     step**: an empty result means there are no messages for that window/conversation in
     AFL (anything predating the number's connection does not exist in the database) —
     never that a sync is missing. See the WhatsApp block under writes for the source
@@ -386,7 +398,13 @@ no model in the middle); for a JUDGEMENT
   - `mcp__afl__query_database` `{ agentId, dataSourceId?, query }` — natural-language
     or SELECT-style question over a connected DB. `dataSourceId` is optional and
     auto-resolved when the agent has a single database source.
-  - `mcp__afl__list_mcp_tools` `{ data_source_id, organization_id? }` — the catalog of
+  - `mcp__afl__list_mcp_tools` `{ data_source_id | integration_uuid, organization_id?, page?, limit? }`
+    — with **`integration_uuid`** (AV-2981) it reads the **LIVE catalog of your personal MCP
+    CONNECTION** (the same read as the screen's tool picker): `source: "live_connection"`, each
+    tool with the `id` that goes in `config.selectedToolIds`, `write`, `inputSchema`; failures are
+    named, never an empty list — `status: "login_required"` + `connectUrl` (the PERSON opens it)
+    or `status: "unavailable"` with the reason; an org connection or someone else's is `blocked`.
+    With `data_source_id` it is the catalog of
     the tools **ENABLED** on an `mcp_server` source: `{ id, name, description,
     inputSchema, required, **`write`** }` per tool, plus `dataSourceId`, `name`, `scope`
     (`personal`|`organization`), `organizationId`, `allowAgentWrite`,
@@ -502,8 +520,64 @@ no model in the middle); for a JUDGEMENT
     it is yours, the org's if it is the org's (active membership AND admin/owner role, the same as creating an org source). At most 50 items:
     `total` says how many exist and `truncated: true` says the list was cut — narrow it with
     `query` (or ask the person) instead of concluding the site does not exist.
+    `kind: "onedrive_items"` (AV-2974, with `folder_id?`, `query?`, `page_token?`) browses the
+    OneDrive of the same account: folders and files with `itemId`, `isFolder`, `mimeType` and a
+    ready `selectedItem` (`{ id, name, type: "folder"|"file" }`) for a `onedrive`/`excel` source;
+    when there is more, `truncated: true` + `nextPageToken` (pass it back as `page_token`).
+  - `mcp__afl__list_databricks_objects` `{ kind, catalog?, schema?, query?, page?, organization_id?, integration_uuid? }`
+    (`datasources:read`, AV-2978) — the `databricks_table` source's cut, like the screen's picker:
+    `warehouses` → `catalogs` → `schemas` (needs `catalog`) → `tables` (needs `catalog`+`schema`).
+    Each item is `{ value, name, description?, extra? }` and `field` says where `value` goes
+    (`databricksWarehouseId`, `databricksCatalogs`, `databricksSchemas`, `databricksTables` —
+    tables come QUALIFIED `catalog.schema.table`). It is **metadata** seen by the connection's
+    credential (the service account, or — in a per-person-login connection — YOUR login), not
+    proof that a SELECT passes. `integration_uuid` defines the scope exactly as in
+    `list_genie_spaces`. 50 per page with `hasMore`/`cut`; failures are named
+    (`reason`: `sem_integracao`, `integracao_inativa`, `credencial_invalida`,
+    `login_da_pessoa` + `connectUrl`, `negado`, `indisponivel` → `status: "unavailable"`).
+  - `mcp__afl__list_integration_resources` `{ integration_uuid, query?, account_id? }` —
+    WHAT the connected account has (AV-2970), so you never ask the person for an id:
+    Google → GA4 `properties` (`propertyId` → `config.propertyIds`); Jira → `projects`
+    (`key` → `config.jiraProjectKeys`) and `boards`; Notion → `databases` (`id` →
+    `config.notionDatabaseId`); GitHub → `repositories` (`fullName` → `config.githubRepos`);
+    Meta Ads → `adAccounts` (`id` "act_…" → `config.adAccountIds`); Basecamp → `accounts`
+    and the `projects` of one account (`account_id` picks it; → `config.basecampAccountId` /
+    `basecampProjectIds`). Read-only, through the same call the UI's source form makes.
+    Account = the integration's: yours if personal; an org one needs ACTIVE membership and
+    the connection visible to you (group filter) — a uuid you cannot see answers "not
+    found", and a key bound to an org does not reach another org's connection. At most 50
+    items per list, with `total`/`truncated` (narrow with `query`). A list that failed
+    comes in `unavailable` with `status` — `needs_reconnect` (credential refused/expired:
+    the person reconnects) is NOT `unavailable` (provider/service down: retry) — and never
+    as an empty list. Microsoft, Databricks and MCP have their own discovery tools above.
+    Personal GitHub, Meta and Basecamp connections now also show up in `list_integrations`.
   - `mcp__afl__list_organization_groups` — the org's groups (name → id), the input to
-    `group_ids` in `create_agent`/`update_agent` **and** in `create_squad`/`update_squad`.
+    `group_ids` in `create_agent`/`update_agent` **and** in `create_squad`/`update_squad`
+    (and, since AV-3050, in `update_data_source`/`update_integration_groups` — an org
+    source's or org integration's "Acesso por grupo").
+  - `mcp__afl__get_whatsapp_status` `{ organization_id?, config_uuid? }` (`datasources:read`,
+    AV-3013) — the WhatsApp **session** status as the screen shows it (read live in the
+    channels service, not the `list_integrations` mirror, which lags): per number, `estado` =
+    `conectado` | `conectando` | `pareando` | `desconectado` |
+    `bloqueado_pela_politica_da_organizacao` | `sem_sessao` | `indisponivel`, plus phone, channel
+    (`evolution`/`cloud`) and `conectadoNoRegistro`. **`indisponivel` (could not read) and
+    `sem_sessao` (the service has no session loaded) are NOT a disconnection** — never tell the
+    person to pair again because of them. Without `organization_id` (and with a personal
+    token): the caller's PERSONAL numbers; with it (or an org-bound token): the org numbers the
+    caller administers (org admin, or admin of the number's group — the screen's rule, decided by
+    the channels service). No secret (no QR). Same engine as the Alter's
+    `gerenciar_integracoes op=obter tipo=whatsapp`. Pairing/reconnecting stays on the WhatsApp screen.
+  - `mcp__afl__get_integration_usage` `{ type, account_id? }` (`datasources:read`, AV-3056) —
+    the integration page's **"Uso"** panel, for the CALLER only (same rule as the screen):
+    calls, successful/failed, `successRate`, average time, per tool and per day, last 30
+    days, plus the health of the sources of that type. `type` is the screen id
+    (`google-workspace`, `microsoft-365`, `jira`, `notion`, `slack`, `hubspot`,
+    `whatsapp-baileys`, `whatsapp-org`, `mcp-connections`, `custom-apis`,
+    `database-connection`, `web-scraping`, `eduzz`; aliases like `google`, `microsoft`,
+    `whatsapp`, `mcp`, `custom_api`, `database` are accepted); `account_id` (an
+    `integrationUuid`) narrows to one account. `calls`/`dataSources` = `null` means the panel
+    does not measure that for the type — **not zero**. A failed read answers
+    `available: false` (an error, with the reason): **say "unavailable", never "0 calls"**.
   - `mcp__afl__list_organization_plugins` `{ organization_id? }` (scope `agents:read`, active
     member only) — the org's **plugins** (e.g. `legal_research` = Pesquisa Jurídica): `status`
     (`enabled` | `disabled` | `not_configured`), `detailRoute` (the screen where an org ADMIN turns
@@ -781,6 +855,126 @@ lacks it — surface verbatim):
     `microsoft_calendar_delete` removes WITHOUT notifying anyone and refuses your own
     meeting with attendees (`OUTLOOK_DELETE_WOULD_NOTIFY_ATTENDEES`); its old
     `send_notifications` param is gone.
+  - **Outlook availability** (since 2026-11, AV-2896). `microsoft_calendar_availability`
+    (`tools:read`, same Outlook calendar source as `microsoft_calendar_read`) returns the
+    free/busy of the connected account plus `attendees` (by **e-mail**, up to 20) in
+    `start_datetime`..`end_datetime` (ISO 8601, at most 31 days) and SUGGESTS the slots of
+    `duration_minutes` (default 30) when everyone is free, inside each person's working
+    hours in their own time zone (`respect_working_hours: false` to ignore them), like the
+    Outlook Scheduling Assistant. Someone whose calendar could not be read (outside the
+    company, not shared) comes back with `readable: false` and a `reason`, and is NOT in the
+    suggestions — never report them as free. It only reads: book with `microsoft_calendar_create`.
+  - **Microsoft To Do and Planner** (since 2026-11, AV-2896), through the agent's PERSONAL
+    Tasks source (Microsoft 365 → Tasks). `microsoft_tasks_read` (`list_todo_tasks`,
+    `list_todo_lists`, `list_plans`, `list_buckets`, `list_planner_tasks`) finds lists, plans and
+    buckets by NAME and returns each task with a short `task_ref` (`tk-…`).
+    `microsoft_tasks_write` creates/updates (`create_todo`, `update_todo` — `completed`
+    true/false closes/reopens —, `create_planner`, `update_planner` — `bucket` moves,
+    `assign`/`unassign` by e-mail, `progress`). Dates are days (`due` YYYY-MM-DD).
+    More actions: read `get_plan`, `list_group_plans` (`group_id`), `get_bucket`,
+    `get_task_details`, `list_task_comments`, `list_checklist`, `list_links`, `lists_changes`;
+    write `create_list`, `rename_list`, `create_plan`, `rename_plan`, `create_bucket`,
+    `rename_bucket`, `update_task_details`, `add_comment`, `add_checklist_item`,
+    `update_checklist_item`, `add_link`.
+    `microsoft_tasks_delete` never deletes on the call: it returns `pending_confirmation`; nothing
+    is deleted until `confirm_action`. With `what` it deletes a To Do `list`, a Planner `bucket`,
+    a `checklist_item`, a `link` or a `comment` (`comment_id` from `list_task_comments`). A name that matches more than one list/plan/task comes back
+    as options — ask, never pick. If the account has not granted tasks yet, the reason
+    `reconnect_required` tells the person to use "Liberar tarefas" in Integrations → Microsoft 365.
+  - **Microsoft Teams** (in the hub since 2026-11, AV-2896), each part through ITS source on the
+    agent: channels (`teams`), meetings (`teams_meetings`) and the person's chats (`teams_chats`).
+    `microsoft_teams_read` lists teams/channels/messages and reads a team, a channel, members,
+    tabs, the channel files folder, one message, its replies and hosted contents, associated
+    teams, installed apps and custom emojis. Team and channel go BY NAME (`team`, `channel`) or by
+    the short ref the lists print (`tm-…`, `cn-…`) — the Graph id never shows; an ambiguous or
+    unknown name comes back with the options. Message ids come from `list_messages`.
+    `microsoft_teams_send` posts in a channel and `microsoft_teams_manage` replies in a thread,
+    edits your message, reacts, creates/updates a channel, adds a member, adds a website tab,
+    creates a custom emoji or notifies your own feed. Posting, replying, editing and adding a
+    member return `pending_confirmation` — nothing happens until `confirm_action`.
+    `microsoft_teams_delete` (delete a channel, remove a member) also needs the agent's Teams
+    delete permission and a person. `microsoft_teams_chats_read` / `microsoft_teams_chat_send` /
+    `microsoft_teams_chat_manage` find a chat by person, topic or `chat_ref` (never the id): read,
+    members, pinned, replies; send or reply; create a new chat (by e-mail), edit your message,
+    react, pin/unpin — creating and editing also go through `confirm_action`.
+    `microsoft_teams_meetings_read` also lists a meeting's recordings (`list_recordings`, same
+    `meeting_ref`) and hands one over as a file (`get_recording`, up to 25 MB), and reads ad hoc
+    calls ("Meet now", 1:1, group): `list_call_transcripts` → `call_ref` → `get_call_transcript`.
+    `microsoft_teams_manage` `create_meeting` / `get_meeting` / `update_meeting` handle a standalone
+    online meeting by its join link; `microsoft_teams_delete` `what: 'meeting'` deletes one.
+  - **Outlook contacts and people/presence** (since 2026-11, AV-2896), each through its PERSONAL
+    source (Microsoft 365 → Contacts / People). `microsoft_contacts_read` searches contacts (name,
+    company, e-mail) and returns a short `contact_ref`; `_write` creates/updates contacts and
+    folders; `_delete` returns `pending_confirmation` (needs the agent's Outlook contacts delete
+    permission). `microsoft_directory_read` reads me, manager/reports (by e-mail), groups, people,
+    `find_people` and Teams presence; `microsoft_directory_write` sets YOUR presence and status
+    message (never someone else's); the profile photo goes through `confirm_action`.
+    Microsoft 365 groups live in the same People source: `microsoft_directory_read` lists them
+    (`list_groups`, `group_members`, `group_calendar`, `group_threads`…) by name or `group_ref`;
+    `microsoft_groups_manage` creates/updates groups and, with `confirm_action`, adds/removes
+    members and owners or replies in a thread; `microsoft_groups_delete` deletes one (needs the
+    agent's groups delete permission and a person).
+  - **Microsoft 365 search** (since 2026-11, AV-2896): `microsoft_search` searches one service at a
+    time (`scope`: mail, calendar, chats, files) ONLY inside what the agent's sources cover —
+    a folder-scoped source or a shared mailbox is refused with the reason, and files outside the
+    sources are dropped (the count comes back). `action: 'copilot'` returns OneDrive passages
+    (Copilot license); SharePoint-wide Copilot is refused. People source also lists sensitivity
+    labels; meetings source lists your webinars and their sessions.
+    `microsoft_subscriptions_manage` turns a source's change notifications on/off (`status`,
+    `create`, `renew`, `reauthorize`, `delete`; mail, calendar or SharePoint source by name) — the
+    destination is always AFL itself, never a URL you pass; `create` and `delete` come back as
+    `pending_confirmation` (settle with `confirm_action`). Members, tabs and
+    channel changes need the admin package; new chats, apps, emojis and notifications need the
+    person's "Liberar recursos do Microsoft 365" — the refusal says which one is missing.
+  - **Outlook replies and mailbox housekeeping** (since 2026-11, AV-2896), through the agent's
+    Outlook (email) source with write enabled. `microsoft_mail_reply` answers IN the same thread:
+    `reply`, `reply_all` or `forward` (`to` required) with `comment` — the original is quoted on its
+    own; `as_draft: true` only saves a draft. Sending returns `pending_confirmation`; nothing leaves
+    until `confirm_action`. `microsoft_mail_manage` marks read/unread, flags, categorizes, sets
+    importance and copies (`message_ids` up to 50), adds/removes attachments on drafts, creates and
+    renames folders; `send_draft`, `delete_folder` and `delete_permanently` (skips Deleted Items, no
+    undo) also wait for `confirm_action`, and the two deletes need "Permitir exclusão" on the agent.
+    `microsoft_mail_read` gained `get_mime` (raw headers), `changes` (what changed in a folder since
+    the returned `cursor`) and `mail_tips` (out-of-office, full mailbox) for `emails`. When the source
+    allows only some folders, every action stays inside them and no new folder is created.
+  - **Shared mailboxes and Outlook settings** (since 2026-11, AV-2896). A shared mailbox is a
+    property of the Outlook (email) SOURCE (`sharedMailbox` in its config, "Caixa compartilhada" in
+    the form); every mail tool takes `mailbox` to pick among the mailboxes the agent's sources
+    grant (`me` = the account's own). A mailbox no source grants is refused with the ones that
+    exist; two shared mailboxes and no `mailbox` is a question, never a guess.
+    `microsoft_outlook_settings_read` reads the automatic reply, time zone, language, working
+    hours, inbox rules, categories and Focused Inbox overrides; `microsoft_outlook_settings_write`
+    changes them. Turning the automatic reply ON and a rule that forwards return
+    `pending_confirmation`; deleting a rule, category or override needs "Permitir exclusão" and
+    `confirm_action`. A source limited to some folders cannot change mailbox-wide settings. When
+    the account has not granted the Microsoft 365 package, the reason says to use "Liberar recursos
+    do Microsoft 365" in Integrations → Microsoft 365.
+  - **Calendars, sharing and rooms** (since 2026-11, AV-2896). Calendar tools take `mailbox` too:
+    someone else's or a shared calendar granted by an Outlook (calendar) source. `microsoft_calendar_read`
+    gained `changes` (what changed since the returned `cursor`), `list_permissions`, `list_rooms`,
+    `list_room_lists` and `get_room` (rooms need the admin approval of the Microsoft 365 package);
+    `microsoft_calendar_availability` gained `mode: "outlook_suggestions"` (Outlook's own finder, with
+    `rooms`). `microsoft_calendar_manage` creates/renames/deletes calendars, shares the calendar and
+    changes or removes someone's access, forwards an invite, snoozes or dismisses reminders, attaches
+    files to events and updates rooms. Sharing, access changes, forwarding and room updates return
+    `pending_confirmation`; deleting a calendar also needs "Permitir exclusão".
+  - **OneDrive housekeeping and sharing** (since 2026-11, AV-2896). `microsoft_onedrive_manage` moves,
+    renames, deletes, creates share links, invites people and removes access, inside the folders the
+    OneDrive source grants (the source's own folder cannot be moved, renamed or deleted). Links,
+    invites and access removal return `pending_confirmation`; delete also needs "Permitir exclusão"
+    for OneDrive. `microsoft_onedrive_read` gained `versions`, `permissions`, `thumbnails`,
+    `preview`, `sensitivity_labels`, and — for a source without folder restriction — `list_drives`
+    and `changes` (with `cursor`).
+  - **SharePoint lists** (since 2026-11, AV-2896). `microsoft_sharepoint_lists_read` reads the lists
+    MARKED in the agent's SharePoint sources (items with OData `filter` and `cursor`, columns with their
+    internal names, item versions, changes); `microsoft_sharepoint_lists_write` creates/updates/deletes
+    items and columns there and creates new lists on a source's site (a new list is outside the source
+    until someone marks it). Deleting needs "Permitir exclusão" for SharePoint.
+  - **OneNote** (since 2026-11, AV-2896). Needs the agent's PERSONAL OneNote source.
+    `microsoft_onenote_read` lists notebooks/sections/pages (by name) and returns a page's text;
+    `microsoft_onenote_write` creates notebooks, sections and pages and appends to a page;
+    `microsoft_onenote_delete` returns `pending_confirmation` and never runs without a person.
+    `site_id` reaches a SharePoint site's notebooks only for sites of the agent's SharePoint sources.
   - **`jira_mudar_status` walks the workflow.** Pass the DESTINATION status
     (`"CLOSED"`), not the next hop: when the workflow requires intermediate states
     it advances on its own while the next step is unambiguous, and returns the
@@ -923,14 +1117,43 @@ lacks it — surface verbatim):
     ORIGINAL accents and casing, which is exactly what a `de` needs. A page is tens of
     KB, so content is capped and any cut is announced (`truncado: true`): **cut content
     is not missing content** — refine with `busca` before concluding a section is absent.
+- **List the documents of an agent's knowledge base** → `mcp__afl__list_knowledge_documents`
+  (`tools:read`) `{ agent_id, page?, limit? (≤100, default 20) }` — the "Documents" tab:
+  `id`, `title`, `isCritical`, `processingStatus` (pending/processing/completed/**failed**),
+  `semanticIndexing` and `injected` (a critical doc is in the prompt NOW). Paginated:
+  `hasMore: true` = ask for `page + 1` (`total` is exact on personal agents; on organization
+  agents it is `null` while there is a next page). `LISTAGEM_INDISPONIVEL` is a read failure,
+  **never** an empty base — do not tell anyone the base is empty from it.
 - **Put a document INTO the knowledge base** → `mcp__afl__create_knowledge_document`
-  (`tools:write`) `{ agent_id, title, content | file_key | file_url, filename?,
+  (`tools:write`) `{ agent_id, title, content | file_key | file_url | youtube_url, filename?,
   source_url?, is_critical? }` — the symmetric write to `search_knowledge_base`, and the
   one to reach for when migrating content into AFL. `agent_id` and `title` are required and
-  exactly one body (`content` / `file_key` / `file_url`) must be present — a call with no
-  body is refused before it goes anywhere. It is a thin facade over
+  exactly one body (`content` / `file_key` / `file_url` / `youtube_url`) must be present — a
+  call with no body is refused before it goes anywhere. **`youtube_url`** (youtube.com /
+  youtu.be only — any other host is refused; **personal agents only** — on an organization
+  agent it is refused with `YOUTUBE_SO_EM_AGENTE_PESSOAL`, as is a YouTube page passed in
+  `file_url`, and nothing is stored or charged): with captions the transcript is stored at once
+  (`method: "captions"`, with `id`); without them the audio is downloaded and transcribed
+  **in the background** (Whisper, paid) and the answer is `outcome: "pendente"` with **no
+  id** — nothing is stored yet; the document shows up in `list_knowledge_documents` only when
+  it finishes (minutes), and not at all if the download fails. It is a thin facade over
   `gerenciar_documentos` `op: "adicionar"` (same executor, same permissions, same
-  asynchronous extraction/vectorization), so use the native one for `op: "listar"`.
+  asynchronous extraction/vectorization).
+- **Mark/unmark a document as critical, or rename it** → `mcp__afl__update_knowledge_document`
+  (`tools:write`) `{ agent_id, document_id, is_critical?, title? }` (at least one of the two)
+  — facade over `gerenciar_documentos` `op: "atualizar"` without content, the same update
+  as the screen's "Always consider". **Cap: only the 3 most recent critical docs enter the
+  prompt** — marking one may push the oldest out: tell the user, and relay
+  `displacedFromPrompt` (the pushed doc stays in the base, just out of the prompt). Unmarking
+  puts the document back into semantic search after async indexing. Only documents you
+  uploaded (`not_found` otherwise, also for a document of another agent); org agent: also
+  Train/Administer or org admin.
+- **Retry a document whose processing failed** → `mcp__afl__reprocess_knowledge_document`
+  (`tools:write`) `{ agent_id, document_id }` — facade over `op: "reprocessar"`, the screen's
+  "Try again": only `failed` (or stuck pending/processing) documents uploaded from a FILE, by
+  you; pasted text is `DOCUMENT_NOT_RETRYABLE`. Asynchronous — it says the extraction is
+  queued again (it spends extraction again), never that it finished; confirm with
+  `list_knowledge_documents`.
   Its counterpart is **`mcp__afl__delete_knowledge_document`** `{ agent_id, document_id }`
   (`tools:write`, facade over `op: "remover"`): the removal is permanent, so the answer is
   `pending_confirmation` with a `confirmationId` — **nothing is removed until you call
@@ -939,7 +1162,7 @@ lacks it — surface verbatim):
   agent, or organization admin** — the base answers everyone who talks to the agent, so
   Interact alone is refused (`KNOWLEDGE_WRITE_FORBIDDEN`, nothing stored); with the right
   permission you can remove any document of that agent, whoever uploaded it. **Indexing is asynchronous** — a search fired immediately after may still
-  return nothing; confirm with `op: "listar"` before concluding anything. And
+  return nothing; confirm with `list_knowledge_documents` before concluding anything. And
   `is_critical: true` documents are **injected into the prompt, not indexed**, so
   `search_knowledge_base` will never return them: verify those by asking the agent to
   quote a literal line (and note that only the 3 most recent critical docs reach the
@@ -985,6 +1208,16 @@ lacks it — surface verbatim):
   an uploaded document is refused (use `op: "remover"`, which confirms). `success: false`
   means nothing was replaced — or, with `error: "substituicao_parcial"`, that BOTH notes are
   now active; `data.lifeMemory.estado` says whether memory was cleared (`limpa`) or not.
+- **Read YOUR OWN Life Memory** → `mcp__afl__get_life_memory` (`agents:read`, read-only)
+  `{ view?: "summary"|"entries"|"patterns"|"insights", organization_id?, limit? }` — what the
+  Life Memory page shows: `summary` (counts), `entries` (timeline: themes, entities,
+  decisions, tone), `patterns`, `insights`. It is ALWAYS the token's own person — there is no
+  parameter to read someone else, and an **organization key without a person is refused**
+  (`blocked`). Without `organization_id` it is the personal memory; with it (or with an
+  organization-bound key, which reads only its organization) the memory inside that
+  organization, for an **active** member only. A read failure is an error saying
+  "indisponível" — never treat it as "nothing remembered". Reading does not mark insights as
+  read.
 - **Generate a file** → `mcp__afl__criar_documento` (`tools:write`)
   `{ agentId, formato: "xlsx"|"docx"|"pptx"|"pdf"|"md"|"html", titulo, conteudo }`.
   Synchronous: when it returns, the file already exists in storage. Read **`data.url`**
@@ -1147,13 +1380,34 @@ lacks it — surface verbatim):
   name template, a text field of the trigger contract, the round item label, or the first line
   of the message), `"manual"` = a person renamed it in the UI, `null` = a run older than the
   field. Refer to runs by `name` when talking to the user — that's how people identify them,
-  not by `#3c7fe4a1`. Renaming is UI-only (no hub tool). `get_squad` shows the squad's
+  not by `#3c7fe4a1`. Rename one with **`mcp__afl__rename_squad_run`** `{ squad_id, run_id, name }`
+  (`squads:run`; `name: null` = back to automatic) — direct, no confirmation; only whoever
+  triggered the run or an org/group admin of the squad (the owner, for a personal squad). `get_squad` shows the squad's
   `runNameTemplate` (`{{trigger.<key>}}`, `{{squad.name}}`, `{{date}}`; `null` = automatic rules),
   read-only through the hub.
   `page`/`limit` paginate (`limit` 1–100). Filter with
   `status` (one value or an array — `pending`, `running`, `waiting_approval`, `completed`,
   `partial`, `failed`, `cancelled`) and/or `start_date`/`end_date` (`YYYY-MM-DD`, over the run's
   creation date; `end_date` is **inclusive** — the whole day counts).
+  **The ROUND, now** (AV-2971) — **`mcp__afl__run_squad_round`** `{ squad_id, periodo? }`
+  (`squads:run`) fires the squad's CONFIGURED round (the whole target list, or the routine's
+  single dispatch), the same "Rodar agora" of the UI. It builds the PLAN (how many runs, which
+  items, estimated cost) and ALWAYS returns `pending_confirmation` with that summary — nothing
+  runs until `confirm_action`; show the summary to the person (it is N paid runs). On confirm the
+  round is created from the plan they saw (if the list changed meanwhile it is refused with
+  `lista_mudou` — plan again); the squad's **daily cap** applies per item, and items that did not
+  enter come back named with the cause. Same gate as `run_squad` (active squad with agent trigger
+  on; owner on personal, ACTIVE member on org; group via the execution gate, fail-closed); an
+  org key with no person is refused (`blocked`). `periodo: { inicio, fim }` (YYYY-MM-DD) fills
+  `{{periodo}}` in each item. Configuring the round is `update_squad`'s job. Out of the
+  architect's perimeter.
+  **Levas** (the batches a round created) — **`mcp__afl__list_squad_rounds`** `{ squad_id, page?,
+  limit? (1–50), origin? schedule|person, outcome? problem|done }` (`squads:read`), newest first,
+  with live counts (`total`, `criadas`, `entregues`, `falharam`, `pendentes`, `naoEntraram`),
+  `desfecho` and `roundPath`; `cobertura` says `total` and `haMais` — don't claim you saw them all
+  without it. **`mcp__afl__get_squad_round`** `{ squad_id, round_id, include_messages? }` returns
+  the items with each one's live run (`run.id` → `get_squad_run`) and why an item did not enter,
+  plus estimated and real cost. A read failure is "unavailable", never an empty list.
   `mcp__afl__list_squads` (`squads:read`) lists
   the squads you can trigger **in the token's context** (see "Squad context" below) — pass `include_all: true` to also see **drafts**,
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
@@ -1375,6 +1629,11 @@ lacks it — surface verbatim):
   first one answered "FALHA: the reference date was missing from the trigger". A value
   that only exists **mid-run** goes in the `approval` step's `fields` (the checkpoint
   above), which uses this same field shape.
+  **Run names — `run_name_template` (AV-3055).** `create_squad` and `update_squad` take a
+  template for each run's name (≤ 200 chars): `{{trigger.<field>}}` (a trigger-contract
+  field), `{{squad.name}}`, `{{date}}`. Any other marker is refused before the write. In
+  `update_squad`, omit = keep, `null`/`""` = remove (back to the automatic name). The
+  response echoes the template **as stored**.
   A squad is born as a **draft** (`is_active=false`) for review in the builder unless
   you pass `is_active: true`.
   **Agent triggering is an EXECUTION permission, not an edit (AV-2229).** `allow_agent_trigger`
@@ -1532,6 +1791,12 @@ lacks it — surface verbatim):
   to **another organization** is rejected outright. `create_squad` echoes the scope it
   stored in `groupIds`; `update_squad` echoes it only when your patch touched it, so
   "I left the scope alone" and "I made it org-wide" never look the same.
+  **Widening goes through a confirmation card (AV-3046).** In `update_squad`, a `group_ids`
+  that **widens** reach — adds a group the squad did not have, or `[]` on a group-scoped
+  squad (back to org-wide) — writes nothing: it returns `pending_confirmation` and is
+  applied only on `confirm_action`. Send it **alone** (mixed with other fields it is
+  refused); an architect session or an org key without a person cannot widen. Narrowing
+  writes directly. If the current scope cannot be read, the change is refused, never applied.
   **Scheduling (cron) is configurable from the hub** — no need to open the AFL builder.
   Frequencies include **`monthly`** with a day of the month (a month without that day
   fires on its last day) — monthly rituals used to be inexpressible and ended up on
@@ -1565,7 +1830,7 @@ lacks it — surface verbatim):
   creator. `list_squads` reports each squad's schedule state (`scheduleEnabled`,
   `scheduleFrequency`, `customScheduleDays`, `customScheduleTime`, `scheduleDayOfMonth`,
   `scheduleMonths`).
-  **Scheduled round by target list — read-only through the hub.** `get_squad` returns
+  **Scheduled round (target list, source list, routine).** `get_squad` returns
   `trigger.scheduleTargets` (`[{ message }]`, up to 50): on every scheduled fire, **each
   target becomes one run** carrying its own message (that is how "run August's report for
   the 22 teams" goes out by itself on the 11th, without one squad per team). No list = one
@@ -1579,12 +1844,42 @@ lacks it — surface verbatim):
   level) is the last round a **person** asked for in the UI (`POST /squads/:id/round`,
   `origin: 'on_demand'`). Two memories because neither may erase the other: the round someone
   fires to *check* the configuration would otherwise wipe the evidence of the scheduled round that went
-  out half-done. Missing `origin` = a record written before the distinction, and it is the cron's. `create_squad`/`update_squad` do **not** accept the list (it is
-  edited in the UI, Schedule tab, or via `PUT /api/.../squads/:id` with
-  `trigger.scheduleTargets`); an `update_squad` never clears it — a partial patch leaves
-  untouched what it does not send. A squad with a required `triggerSchema` **cannot** be
+  out half-done. Missing `origin` = a record written before the distinction, and it is the cron's.
+  **Editing the round (AV-3049) — `update_squad`**, same rules as the UI's Schedule tab:
+  `schedule_targets` (array of message strings, REPLACE; `[]` = back to the single run),
+  `schedule_source_list` (`{ data_source_id, agent_id, label_column, key_column?, message_template }`
+  — every row of the source becomes one run per fire; `null` = back to the typed targets) and
+  `schedule_routine` (`{ selection, period?, rhythm?, text?, why? }` — which items the cron runs;
+  `null` = the whole list). The agent must be the agent of a step, and the source must be one that
+  agent reads **for you** (else `blocked`, `LISTA_DA_FONTE_FORA_DO_ALCANCE`). Changing the round of a
+  schedule that is **on** multiplies runs, so it needs `squads:run` too (else `blocked`, reason
+  `schedule_round_requires_run`); the squad's daily run cap still applies on every fire. Before
+  saving a source list, **`mcp__afl__preview_squad_source_list`** `{ squad_id, data_source_id?,
+  agent_id?, label_column?, message_template? }` (`squads:write`, edit permission on the squad,
+  reads the source now, writes nothing): with only `squad_id` it lists the candidate sources per
+  step agent; with source + agent, the columns; with label + template, the items and messages as
+  the cron would build them. `trigger.listaDaFonte` / `trigger.rotina` in `get_squad` are the saved
+  list and routine. An `update_squad` without these fields never clears them — a partial patch
+  leaves untouched what it does not send. A squad with a required `triggerSchema` **cannot** be
   scheduled (with or without a list): a scheduled fire only carries the message, and the API
   refuses at configuration time.
+- **Cancel a run / retry a failed step** (AV-2961) — **`mcp__afl__cancel_squad_run`**
+  `{ squad_id, run_id }` and **`mcp__afl__retry_squad_step`** `{ squad_id, run_id, step }`
+  (`squads:run`; `step` = the `stepKey`, the step `id`/`stepId` from `get_squad_run`, or its
+  exact name). Both come back **`pending_confirmation`** with a `confirmationId` — nothing
+  happens until **`confirm_action`** (`tools:write`): show the summary to the person and confirm
+  only on their "yes". Cancel stops a queued/running/waiting run and it **cannot be resumed**;
+  retry re-runs a step that is `failed` (it spends again) and re-queues the steps the failure
+  cancelled — a step that is not `failed` is refused, listing the ones that are. Who may: whoever
+  triggered the run, or an org admin / admin of a group that scopes the squad (the owner, for a
+  personal squad); retry also needs the right to run the squad. The server decides at
+  confirmation time — a refusal comes back `blocked`. An outcome the server did not confirm
+  (timeout, 5xx) comes back `outcome: "unknown"` — check with `get_squad_run` **before** asking
+  again; repeating may act twice.
+- **Step-by-step runs** (AV-2976) — `run_squad { interactive: true }` starts the run
+  **supervised**: it pauses before and after each step waiting for a PERSON, who continues,
+  redoes, instructs or asks the step **in the UI** (`run_url` in the response). There is no hub
+  tool to drive the steps — by product decision, pausing is a human call.
 - **Delete a squad** — **`mcp__afl__delete_squad`** `{ squad_id, confirm: true }`
   (`squads:write`). `confirm: true` is **required** (same rule as `delete_automation`):
   without it the call is refused and **nothing is sent**. Who may: the owner of a personal
@@ -1609,7 +1904,10 @@ lacks it — surface verbatim):
   still gets a plain not-found (404), so "desligada" never leaks that it exists. (Until
   09/2026 the hub answered 404 "não encontrada ou inativa" for an inactive one, which read as
   a wrong id.)
-  `mcp__afl__list_automations` (`automations:read`) lists the visible ones.
+  `mcp__afl__list_automations` (`automations:read`) lists the visible ones. With
+  `{ data_source_id, organization_id? }` it returns only the automations that READ that source
+  (main or extra sources) — the screen's rule; `complete: false` = the org list is cut by your
+  group access, so "none" is not a fact.
   **Reads of ONE resource can fail the same way** — `get_squad`, `get_squad_run`,
   `list_squad_runs`, `get_automation`, `get_automation_result`: "Não foi possível
   confirmar seu acesso a este recurso agora, então nada foi lido…" (503
@@ -1654,7 +1952,7 @@ lacks it — surface verbatim):
     the same call.
 
   Fields accepted by create/update: `name`, `description`, `frequency`,
-  `custom_schedule_days`, `custom_schedule_time`, `data_source_id`, `data_source_ids`,
+  `custom_schedule_days`, `custom_schedule_time`, `schedule_timezone`, `data_source_id`, `data_source_ids`,
   `personal_agent_id`, `analysis_type`, `analysis_custom_prompt`, `conditions_logic`,
   `condition_groups[]`, `conditions[]`, `actions[]`, `is_active`, `monthly_cost_limit_brl`.
 
@@ -1688,7 +1986,7 @@ lacks it — surface verbatim):
   `automations:write` (no `automations:run`): `create_automation` without `is_active` is born
   **inactive** (with a `warnings` entry saying so); `is_active: true` on create, activating an
   inactive automation with `update_automation`, and changing **when** an active one runs
-  (`frequency`, `custom_schedule_days`/`custom_schedule_time`) come back **`blocked`** with
+  (`frequency`, `custom_schedule_days`/`custom_schedule_time`, `schedule_timezone`) come back **`blocked`** with
   nothing saved (403 `AUTOMATION_SCHEDULE_REQUIRES_RUN_PERMISSION`). With `automations:run`,
   `create_automation` defaults to active, as before. Re-sending the saved state and
   deactivating never need it.
@@ -1709,17 +2007,31 @@ lacks it — surface verbatim):
   in BOTH contexts**: in an organization every id is checked **one by one** and a source
   from outside the org is refused **naming the offending id**; the main source is folded
   into the list if you left it out, and an **empty list is a legitimate request** ("back to
-  a single source"). There are **two** `conditionType`s, `always_run` and `custom` — see
+  a single source") — on update `data_source_ids: []` really clears the extra sources
+  (AV-3029; it used to be dropped). `schedule_timezone` is the IANA zone the schedule's clock
+  uses (`daily`/`weekly` fire at 9h local, `custom_schedule_*` are local day/time); omitted on
+  update = kept; an unknown zone is a **400** (same check as the screen). On a `custom`
+  automation, sending only `custom_schedule_days` (or only the time) updates it, the other
+  half coming from what is stored; `custom_schedule_days: []` on a `custom` automation — or
+  switching to `custom` without days/time — is a **400** (`CUSTOM_SCHEDULE_DAYS_REQUIRED` /
+  `CUSTOM_SCHEDULE_TIME_REQUIRED`): zero days would never run. Outside `custom`, `[]` is
+  accepted and changes nothing. There are **two** `conditionType`s, `always_run` and `custom` — see
   the automations skill for the catalogue.
 
-  **`group_id`: create only, and it is a REACH decision.** `create_automation` takes
+  **Group scope is a REACH decision.** `create_automation` takes
   **`group_id`**, scoping the automation to ONE group of the organization — only people in
   it see and trigger it; omitted, it is born visible to the whole org. It needs a token
   **with an organization** and **org admin/owner**, checked **before** the round-trip:
   asking for a group in a personal context is **REFUSED, not ignored**, and nothing reaches
-  the server. **`update_automation` does NOT re-scope** — not a product choice: the internal
-  edit DTO does not declare the field and the pipe runs `forbidNonWhitelisted`, so sending
-  it would fail the whole PATCH with a 400. Group scope is set once, at create.
+  the server. **To move an existing org automation, `update_automation` takes `group_ids`**
+  (AV-3028): the FINAL list of groups (REPLACE), `[]` = the whole organization — through the
+  same group-scope engine as `update_data_source`/`update_integration_groups` (b2b's
+  `SetResourceGroupScopesCommand`). Only an **active org admin/owner** may do it (a group
+  admin gets `blocked`, already on the read); a group from another org is refused; an
+  automation from another org is a 404. **Widening** (a new group, or back to the whole org)
+  comes back `pending_confirmation` (`confirm_action`) and must go **alone** in the call;
+  narrowing writes straight away, before the other fields, and the echo carries
+  `groupScope`. An architect session or a key without a person can only narrow.
   One accepted asymmetry: **a GROUP admin with no org role is blocked by the hub's gate**,
   even though the internal route would accept them. Their path is to **omit `group_id`** —
   the route then resolves the single group they administer on its own. Closing by default
@@ -1744,6 +2056,19 @@ lacks it — surface verbatim):
   analysis happened and nothing was charged. When all the rows are like that, the last real
   execution comes at the end of the list (and it is older than the ones before it). Report
   "no new data since <that run>", not "it stopped working".
+
+  **`list_automation_runs` is the cross-automation history, with filters** (`status`,
+  `from`/`to` ISO 8601 — `to` exclusive —, `origin` = `scheduled`|`manual`|`squad`,
+  `automation_id`, `page`/`limit` up to 100; default 20). It is the same read as the
+  execution-history screen, with the screen's scope: **without `automation_id` it covers
+  only automations YOU created**, in the token's space (personal, or the key's org with
+  active membership) — an org automation created by someone else is not there, and that is
+  not "it never ran". Pass `automation_id` for it (works if you reach it through your group;
+  then every run of that automation comes back). Read `recorte` and `corte` in the reply:
+  without `hasNext: false` the list is NOT everything. `tokensUsed` is as recorded (do not
+  derive a cost from it); the analysis is a 500-char preview — the full text is
+  `get_automation_result`. A failed read is an ERROR ("unavailable"), never an empty list.
+  The screen's aggregate stats are not exposed.
 
   **`get_automation` (definition) ≠ `get_automation_result` (history) — the old name
   does not help.** One answers *what the automation IS*, the other *what it DID*. The
@@ -1777,11 +2102,14 @@ proposes a **plan that the user approves**, and only then creates/edits — runn
 with the same RBAC, inside a cost cap. A single tweak is cheaper done directly with the tools
 above.
 
-- **`mcp__afl__start_architect_run`** `{ prompt, organization_id?, teto_usd? }`
+- **`mcp__afl__start_architect_run`** `{ prompt, organization_id?, teto_usd?, motor? }`
   (`agents:write`) → `{ runId, estado, url, proximoPasso }`. The run is **asynchronous and
   durable** (legs on a queue); the call returns at once. No `organization_id` = the token's
   org; personal token = personal scope. `teto_usd` defaults to 3, max 10. It may be refused
-  while the architect is not enabled for the account (`ARCHITECT_RUNTIME`).
+  while the architect is not enabled for the account (`ARCHITECT_RUNTIME`). `motor`:
+  `"plataforma"` (default — the platform's architect reasons, the loop below) or `"cliente"`
+  (YOU reason through the `architect_*` tools and the platform calls no model — follow the
+  **`afl-architect`** skill).
 - **`mcp__afl__get_architect_run`** `{ run_id, after_seq? }` (`agents:read`) — state, cost/cap,
   the plan with each step's state, open questions and the event feed. **Poll it** (every
   ~20 s, passing `after_seq = ultimoSeq` to get only new events). Its `proximoPasso` tells
@@ -1824,6 +2152,25 @@ verified the usual way (`get_agent`, `get_squad`, `list_data_sources`…). Undoi
 resource it created, in reverse order, as a new plan to approve) is on the run's page in the
 UI (`url`).
 
+**Client engine (`motor: "cliente"`)** — the loop and its rules live in the `afl-architect`
+skill; the tools, all `{ run_id, … }`:
+`architect_context { after_seq? }` (state, `fase`, `vez: cliente|plataforma`, `orientacoes` =
+the doctrine to follow, plan, questions, events, `toolsDaFase`, `proximoPasso`) ·
+`architect_map_account` / `architect_diagnose` / `architect_verify_plan` (read) ·
+`architect_ask { perguntas[] }` (answers via `answer_architect_questions`) ·
+`architect_propose_plan { objetivo, motivoDaMudanca?, passos[] }` (steps `{ titulo, detalhe?,
+acaoTipo, toolName, alvo, args | semArgs, destrutivo, verificacao? }`; earlier resource =
+`{"$passo": n, "campo": "id"}`; stops at `aguardando_aprovacao`) ·
+`architect_call_tool { tool_name, args }` (the ONLY way to write inside the run — matches the
+pending step and enters the undo; calling `create_agent` etc. directly bypasses both) ·
+`architect_mark_step { passo, estado: executado|pulado|falhou, resultado_ref?, erro? }` ·
+`architect_conclude { resumo }`. After approval the platform runs the steps with `args` on its
+own; while `vez: "plataforma"` do not write (`ARCHITECT_NOT_CLIENT_TURN` = wait and re-read). Other
+refusals: `ARCHITECT_RUN_NOT_CLIENT_ENGINE`, `ARCHITECT_RUN_TERMINAL`, `ARCHITECT_RUN_NOT_FOUND`,
+`ARCHITECT_ORG_MEMBERSHIP_INACTIVE`, `ARCHITECT_ROLE_UNAVAILABLE`. Approval is still the
+person's (here after an explicit yes, or on the screen). 24 h without activity → the run ends as
+`falhou` (continue from the screen).
+
 ### Manage agents and skills
 
 CRUD of the user's own agents and skills — separate from `chat_with_agent` (which
@@ -1846,6 +2193,24 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   member (deactivated membership) never counts.
   `update_agent` with `prompt_edits`/`prompt_append` on such a card is refused
   for permission — nothing is written.
+  **Usage numbers (AV-3020).** `get_agent` also takes `include_stats: true` (usage,
+  performance and cost over the window — default last 30 days, `start_date`/`end_date` in
+  ISO) and `include_executions: true` (the execution history, `executions_limit` 1–100,
+  `executions_offset`). They come back under `usage` — the SAME numbers the agent's
+  analytics tab shows, read with the tab's rule: only the personal agent's owner or an
+  ACTIVE member of the agent's organization sees them (org cost is management data).
+  Without that, `usage.statsUnavailable`/`usage.executionsUnavailable` comes with
+  `reason: "forbidden"`; an analytics outage comes as `reason: "unavailable"` — the numbers
+  are UNKNOWN then, never zero. Nothing is read unless you ask.
+  **`mcp__afl__improve_agent_prompt`** `{ agent_id, mode?: "improve"|"validate", draft? }`
+  (scope `agents:read`, AV-3021) is the screen's "Improve with AI" and prompt-adjustments
+  badge, as a **proposal that never writes**: `improve` returns
+  `proposal.melhoria.improvedPrompt` (+ `applied: false` when the rewrite did not beat the
+  original and was discarded), `validate` returns `proposal.validacao` (score, issues,
+  recommendations; `ok: false` = the screen would block the save). It evaluates the stored
+  prompt, or your `draft`. Only whoever can read the config (owner / org trainer or admin)
+  gets a proposal; anyone else is refused (`blocked`). It calls an LLM (cost). To APPLY,
+  show the proposal to the user and, with their go-ahead, call `update_agent`.
   **`mcp__afl__create_agent`** (scope `agents:write`): without `organization_id` it creates
   a **personal** agent (only `name` ≥3 chars required); with `organization_id` it creates an
   **org** agent (requires `name` + `prompt`, and the user must be **admin/owner** of the
@@ -1854,6 +2219,17 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   only), `temperature` (0–2), `category`/`target_audience` (personal only),
   `avatar_icon`, `avatar_color`, `tool_use_enabled`, and `group_ids` (org only — see below).
   **The model is not one of them** — see the note below.
+  **Duplicate an agent:** `create_agent { from_agent_id, name? }` copies one of **your
+  personal** agents (only the owner duplicates; org agents and the Alter are refused —
+  `AGENT_CLONE_ORG_NOT_SUPPORTED` / `AGENT_CLONE_ALTER_NOT_ALLOWED`). With `from_agent_id`
+  only `name` is accepted (omitted = `"<name> (cópia)"`); adjust the rest afterwards with
+  `update_agent`. The copy takes the prompt, configuration, level/subtype, the **enabled
+  skills without their secrets** and the data sources **you can reach**; it never takes the
+  knowledge base, history, Life Memory, shares, widgets or an image/video avatar. Read the
+  reply: `skillsToReconfigure` (skills that need their secret fields set again before they
+  work — `update_agent_skill`), `skillsNotCopied` and `dataSourcesNotCopied` (with the
+  reason) — do not tell the user the copy is identical. It counts against the plan's agent
+  quota like any creation. `delete_agent` undoes it.
   **`tool_use_enabled`** (boolean, default `true`; personal **and** org, on `create_agent`
   and `update_agent`) declares whether the agent uses tools at all. Set it to `false` only
   for an agent that just **reports** what it is given — a transcriber, a translator, a
@@ -1866,7 +2242,8 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   **`auto_approve_whatsapp_messages`** (boolean, personal **and** org agents, `update_agent`
   only) is the per-agent half of the WhatsApp **dual opt-in**: an agent sends WhatsApp
   (text or audio) without manual approval only when this flag **and** a master switch are
-  both on. Which master switch depends on the agent: on a **personal** agent, the user's
+  both on. **Turning it ON** returns `pending_confirmation` (send it alone in the call;
+  architect sessions and person-less keys cannot turn it on); turning it off writes directly. Which master switch depends on the agent: on a **personal** agent, the user's
   own; on an **org** agent, the master switch of **whoever paired the WhatsApp number used
   for the send**, and only while that person is an active member of the org (not the
   switch of whoever is chatting). On an org agent the flag itself needs an active
@@ -1883,10 +2260,97 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   **not** `is_public` (store listing for signed-in users) — never use one for the other.
   Same authorization as the UI toggle: on a personal agent, **only the agent's owner**; on an
   org agent, an **active admin/owner of the agent's organization**. Anyone else gets an error
-  and nothing in that `update_agent` call is written. It is written before the rest of the
-  update through its own route; the reply echoes it under `updated` as `isPublishable`.
-  Turning it on exposes the agent's connected data to anyone with the app link — confirm
-  with the user before setting `true`.
+  and nothing in that `update_agent` call is written. **Turning it on (`true`) widens access**
+  (it exposes the agent's connected data to anyone with the app link): it comes back
+  `pending_confirmation` with a `confirmationId` and writes **nothing** until `confirm_action`
+  — show the summary and confirm only on the user's explicit yes. Send it **alone** (only
+  `agent_id`, `is_publishable` and, if needed, `group_ids`); an architect session and an org
+  key without a person cannot turn it on. Turning it **off** (`false`) is written immediately,
+  before the rest of the update, through its own route; the reply echoes it under `updated` as
+  `isPublishable`.
+  **Personality, tone, language, voice and video** (personal **and** org agents,
+  `update_agent` only; org needs an active admin/owner, like the rest of the update) — the
+  same fields the agent's config screen and the Alter's `gerenciar_agentes` write:
+  `personality` `{ creativity, formality, verbosity, empathy, humor }` on a **0–100** scale
+  (the screen shows 1–10: 7 there = 70 here) — send only the sliders that change, the
+  others are kept; `personality_traits` **redefines** the list (`[]` clears; ids
+  `professional`, `friendly`, `casual`, `formal`, `empathetic`, `direct`, `creative`,
+  `analytical`, `supportive`, `balanced`); `tone_of_voice` (`professional`, `friendly`,
+  `casual`, `formal`, `enthusiastic`); `language` (`pt-BR`, `en-US`, `es-ES`);
+  `voice_enabled` (ElevenLabs TTS — it has a cost; turning it off on a personal agent also
+  clears the chosen voice); `eleven_labs_voice_id` (choosing a voice alone also turns voice
+  on; with `voice_enabled` in the same call, `voice_enabled` wins); `voice_settings`
+  `{ stability, similarity_boost }` on **0–1**, only what changes; `video_enabled` (the avatar
+  videos themselves are uploaded in the UI — there is no tool field for their URLs). Values
+  outside these lists/ranges are refused before any write. The reply echoes them under
+  `updated` (`personality`, `personalityTraits`, `toneOfVoice`, `language`, `voiceEnabled`,
+  `elevenLabsVoiceId`, `voiceSettings`, `videoEnabled`).
+  **Context retention** (personal **and** org agents, `update_agent` only — AV-3016):
+  `context_retention_days`, an integer **1–365**, or `null` for **no limit**. Messages older than that many days stop
+  entering the history the agent sends to the LLM (the per-turn history and the rolling
+  summary); they stay in the database and in the visible conversation — **nothing is
+  deleted**, so lowering it writes directly, without a confirmation card. It does not touch
+  long-term memory (Life Memory) or the knowledge base. No agent has a window by default
+  (personal or org): `null` = no limit. Echoed as `updated.contextRetentionDays`;
+  `get_agent` returns `contextRetentionDays` (`null` = no limit).
+  **Avatar image** (personal **and** org agents, `update_agent` only — AV-3002): exactly ONE
+  of `avatar_file_key` (an image file_key **of yours** — a chat attachment or an export;
+  someone else's key is refused with `AVATAR_ARQUIVO_ALHEIO`), `avatar_image_url` (an
+  http(s) URL, downloaded through the guarded fetcher — internal addresses are refused with
+  `AVATAR_LINK_RECUSADO`) or `generate_avatar: true` (the UI's "generate avatar" robot, in
+  the agent's color). JPEG/PNG/WEBP up to 10 MB; anything else is `AVATAR_FORMATO_INVALIDO`
+  / `AVATAR_GRANDE_DEMAIS`. The platform stores it as a 512² progressive JPEG (≤50 KB) and
+  the reply echoes the stored URL under `updated.avatarImageUrl`. Same authorization as the
+  rest of the update; a refusal writes **nothing** in that call (the image is prepared before
+  any other write).
+  **Avatar videos** (standby / active-while-speaking, personal **and** org agents — AV-3038):
+  `avatar_standby_video` and `avatar_active_video`, each either a video file_key **of yours**
+  or an http(s) URL (same ownership and guarded-download rules as the image). The platform
+  does **not** transcode: the file must already be **MP4, at most 720p (1280×720, either
+  orientation) and at most 500 KB** — otherwise it is refused with `AVATAR_FORMATO_INVALIDO`,
+  `AVATAR_VIDEO_ACIMA_DE_720P` or `AVATAR_GRANDE_DEMAIS` and nothing is written. Setting a
+  video switches the avatar to `dual_video` (as the UI upload does) without touching the
+  icon, color or image; `""` or `null` removes that video directly. Echoed under
+  `updated.avatarStandbyVideoUrl` / `updated.avatarActiveVideoUrl`.
+  **`is_active` on an ORG agent** (AV-3015): **re-activating** (`true`) goes straight through.
+  **Deactivating** (`false`) switches the agent off for the whole team, so it comes back
+  `pending_confirmation` with a `confirmationId` — **nothing changes until
+  `confirm_action`**; show the summary to the user and confirm only on their "yes". Send it
+  **alone** (`{ agent_id, is_active: false }`): mixed with other fields it is refused without
+  writing anything. Only an active admin/owner of the org can do it (re-checked on accept).
+  **Agent permissions on `update_agent`** (AV-2952) — the same rules and services as the
+  agent's Permissions tabs, never a side door:
+  - **`delete_permissions`** `{ connector: true|false }` (personal **and** org agents) — the
+    per-connector "allow permanent delete" switches (`hubspot`, `gmail`, `google_calendar`,
+    `google_sheets`, `outlook_mail`, `outlook_calendar`, `excel`, `sharepoint`, `onedrive`,
+    `teams`, `outlook_contacts`, `m365_groups`, `notion`, `mcp`). Off by default; an unknown
+    key is refused (not ignored). Personal: owner only; org: active admin/owner.
+  - **`permissions`** `[{ target_type: "user"|"group", target_id, can_interact, can_train,
+    can_execute_animus_actions, can_execute_integration_actions, remove }]` (org agents only)
+    — who in the org uses the agent, per **member or group**, with the four grants of the
+    org permissions tab. Each item updates only the flags it sends; `remove: true` drops the
+    target's row. The target must be an **active member** or a **group of that org**.
+    Different from `group_ids`, which *redefines* the groups with "interact" only.
+  - **`use_person_memory`** (boolean, org agents only) — the org agent reads the personal
+    memory (Life Memory) of whoever is talking to it.
+  - **`tool_permissions`** `[{ tool_name, can_execute, max_executions_per_hour,
+    max_executions_per_day }]` (personal **and** org agents, AV-2980) — per native tool:
+    whether the agent may run it and how many times per hour/day, checked on **every**
+    execution. Each item changes only the fields it sends; a ceiling of `null` removes it.
+    `tool_name` is the exact native tool name — a `skill_*` name or an unknown one is
+    refused (skills are switched with `enable_agent_skill`/`disable_agent_skill`). The current
+    state comes in `get_agent` as `toolPermissions` (only blocked or capped tools; any tool
+    not listed runs freely) — for whoever can configure the agent.
+
+  Anything that **widens** access — enabling a delete switch that is off, granting a flag the
+  target did not have, turning person memory on, unblocking a tool, raising or removing a
+  tool ceiling — writes **nothing**: it comes back
+  `pending_confirmation` with a `confirmationId` and a human-readable `summary`. Show the
+  summary to the user and call `confirm_action` **only with their explicit yes**. A widening
+  request must go **alone** in its call (any other field alongside it is refused, nothing
+  written); an architect session and an org key without a person cannot widen at all.
+  Anything that only **narrows** (`false`, `remove`, a new or lower ceiling) is written immediately, with the rest of
+  the update, and echoed under `permissions` with the re-read state.
   **`agent_type` is the one model lever a tool has.** It is the same value `get_agent`
   returns as `agentType`, and it is the matrix's subtype row: precedence is *agent's own
   model → **subtype** → functionality → default*. Omitted, an agent is born `assistant`,
@@ -1912,9 +2376,9 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
     there for good, since changing it would mean recreating the agent and losing the id
     every squad step references.
   **`mcp__afl__update_agent`** `{ agent_id, ... }`
-  (`agents:write`) patches fields (omitted = preserved; on an org agent `category`/`is_active`
-  are ignored — those two, and only those two, are personal-only — and `group_ids`
-  **redefines** the groups). The reply **echoes the fields it changed** under `updated`,
+  (`agents:write`) patches fields (omitted = preserved; on an org agent `category` is
+  ignored — it is the only personal-only field — `is_active: false` asks for confirmation
+  (see above), and `group_ids` **redefines** the groups). The reply **echoes the fields it changed** under `updated`,
   with the *effective* value the write returned (so an org `alter` comes back as
   `assistant`), plus `promptChars` when the prompt changed — never the prompt text. Anything
   asked for that the write did not confirm is listed apart, under `requestedNotConfirmed`.
@@ -1939,6 +2403,14 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   `prompt`). The current value is read through the same route that writes it, so an
   org agent is read from the org side and a personal one locally.
   **`mcp__afl__delete_agent`** `{ agent_id }` (`agents:write`) soft-deletes.
+  **`mcp__afl__clear_agent_conversations`** `{ agent_id }` (`agents:write`) permanently
+  deletes **the token owner's own** conversation history with that agent (messages and
+  conversations; other people's stay) — the "Apagar mensagens" button of the agent's
+  configuration tab, same rule (agent owner; org agent: active admin/owner). It is
+  irreversible, so it **always** returns `pending_confirmation` with a summary saying how
+  many conversations and messages go — show it and call `confirm_action` only on the
+  person's "yes". No conversations = nothing to confirm. An organization key (no person)
+  and the configuration architect are refused (`blocked`).
   An org agent shows `type: "organizational"` + `organizationId` in `list_agents`; writing
   to it needs org admin/owner (enforced server-side) — being the agent's *creator* is not
   enough, so a refusal naming "admin/owner" means the role is missing, not the id. Don't
@@ -2082,12 +2554,26 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   `group_ids` is **REPLACE, not append**: the list is the desired final state,
   groups left out are unlinked and `[]` unlinks all, which makes resending the same list
   idempotent. Omitting it in `update_agent` leaves the groups untouched — read the current
-  ones from `get_agent` first when you mean to add to them. In `create_agent` the linking
+  ones from `get_agent` first when you mean to add to them. In `update_agent`, a list that
+  **adds** a group the agent did not have widens access: it comes back `pending_confirmation`
+  (nothing written until `confirm_action`, on the user's explicit yes), must go **alone**
+  (only `agent_id`, `group_ids` and optionally `is_publishable`), and an architect session or
+  an org key without a person cannot do it. A list that only **removes** groups is written
+  immediately. In `create_agent` the linking
   happens *after* the agent exists, so a failure there returns the agent plus a `warning`:
   fix it with `update_agent`, don't recreate. `group_ids` on a personal agent is an error.
 - **Skills** — `mcp__afl__list_skills`
   `{ visibility?, type?, category?, search?, organization_id?, page?, limit?, fields?, include_inactive? }`
-  and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`).
+  and `mcp__afl__get_skill` `{ skill_id }` (scope `skills:read`). `get_skill` also returns
+  `agents` — the agents that use the skill, ONLY those you can reach (same rule as the
+  screen's "used by" list) — and `assets`; if either could not be read it comes as
+  `{ error }`, never as an empty list (don't report "no agent uses it" from an error).
+  **`mcp__afl__validate_skill`** (scope `skills:read`) checks a skill DRAFT without saving
+  anything — same fields as `create_skill` (`slug`, `name`, `description`, `type`,
+  `prompt_injection`, `tool_definitions`, `execution_config`, `parameters_schema`,
+  `default_parameters`) — and returns `{ ok, errors[], warnings[] }` with every problem at
+  once (the same validator the in-chat builder uses; no LLM; slug uniqueness is only
+  checked by `create_skill`). Validate before creating instead of creating to find out.
   **Start with `visibility`, not with the whole catalog.** It takes `personal |
   organizational | platform`, and it is the first filter because an unfiltered listing is
   dominated by the platform skills, which are the same for everyone and usually not what
@@ -2109,8 +2595,27 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   from the target org**: `organization_id` (or the org of an org-scoped token) → skill of
   that **organization** (caller must be a member); no org → **personal**. The response
   echoes `visibility` + `organizationId`. **`mcp__afl__update_skill`**
-  `{ skill_id, group_ids?, ... }` (`skills:write`) patches (slug/type/visibility are immutable);
-  **`mcp__afl__delete_skill`** `{ skill_id }` (`skills:write`).
+  `{ skill_id, group_ids?, ... }` (`skills:write`) patches (slug/type/visibility are immutable).
+  **Who may edit is the AFL screen's rule** (AV-2984): the owner of a personal skill; on an
+  organization skill, an org admin/owner with an ACTIVE membership or the admin of the group the
+  skill is restricted to — a plain member gets `blocked` (nothing written), even for a skill they
+  created; platform skills are admin-area only. **`mcp__afl__delete_skill`** `{ skill_id }` (`skills:write`).
+  - **Testing a skill — `mcp__afl__test_skill`** `{ skill_id, params?, operation?, config? }`
+    (`skills:write`, AV-2987) is the screen's "Testar" button: it runs the skill's **webhook once**
+    through the same service (`POST /api/skills/:id/test`). Who may test: whoever can **see** the
+    skill. A **GET** webhook runs right away; any other method (POST is the default) calls the
+    destination for real and may write there, so it returns `requiresConfirmation` with a
+    `confirmationId` — **nothing runs until `confirm_action`** (show the `summary` to the person
+    first). An org key without a person (`SKILL_TEST_NEEDS_PERSON`) cannot test a writing webhook.
+    `config` overrides the skill's default parameters for this run and is never echoed. Prompt and
+    native skills are not testable in isolation (`SKILL_NOT_TESTABLE` — enable the native one on an
+    agent and ask for the action). Read the outcome by **`desfecho`**, not by the prose:
+    `passou` (with `resultado`); `teste_falhou` (`SKILL_TEST_FAILED` — the skill RAN and the
+    destination failed/refused: fix URL, method, auth or params; this is not a platform failure);
+    `infraestrutura` (`SKILL_TEST_UNAVAILABLE` — the platform failed and the skill did NOT run;
+    retry later). A writing test that failed by timeout may still have reached the destination:
+    check there before repeating. If the skill's method/URL changed between the request and the
+    confirmation, the confirmation is refused (`SKILL_TEST_TARGET_CHANGED`).
   - **Scoping an org skill to groups — `group_ids`.** `create_skill`/`update_skill` take
     `group_ids` (resolve ids with `list_organization_groups`), **organization skills only**
     (on a personal or platform skill it is refused). Same contract as an agent's `group_ids`:
@@ -2126,6 +2631,12 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
     **Re-scoping** (`update_skill` with `group_ids`): a group admin may only touch a skill whose
     CURRENT groups are all groups they administer — an org-wide skill, or one that includes a
     group they don't administer, is org-admin only (refused, nothing written).
+    **Widening needs a person** (AV-2984): an `update_skill` whose `group_ids` WIDENS who reaches
+    the skill (adds a group that wasn't there, or `[]` on a restricted skill) is NOT written — it
+    returns `pending_confirmation` with a `confirmationId` (approve with `confirm_action`), and it
+    must go ALONE (send other fields in a separate call first, or it is refused). Narrowing (or
+    repeating the current scope) is written directly. An architect session or an organization key
+    without a person can only narrow (`blocked`).
     The scope write is atomic: on `create_skill`, if the groups cannot be saved the creation is
     **undone** and the call fails (`Skill NÃO criada…`) — nothing is left open to the whole org;
     just retry. On `update_skill`, a failed group write leaves the previous scope in place and the
@@ -2181,14 +2692,24 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   loads anything external (`@import`, `url()` other than `asset://`/`data:`/`#id`) or
   contains `<` is REFUSED (`SKILL_ASSET_CSS_REJECTED`); `.woff2` is checked by its
   `wOF2` signature; an existing name fails
-  unless `replace: true`. **`mcp__afl__delete_skill_asset`** `{ skill_id, asset_id,
+  unless `replace: true`. **`mcp__afl__update_skill_asset`** `{ skill_id, asset_id,
+  description?, visibility? }` (`skills:write`) changes the description and/or the
+  visibility WITHOUT re-sending the file (the screen's PATCH); `description: null`/`""`
+  clears it. **`mcp__afl__delete_skill_asset`** `{ skill_id, asset_id,
   confirm: true }` (`skills:write`) — destructive, refused without `confirm`.
   - Who can: managing = whoever can EDIT the skill (owner of a personal skill; org
     owner/admin, or admin of the group the skill is scoped to — a plain org member
     gets `blocked`); platform skills only through the admin UI/API, never the hub.
   - `visibility: "public"` puts the file on the CDN at a stable, unauthenticated URL —
     only for brand material that is already public. Private (the default) is enough
-    for agents to use the file.
+    for agents to use the file. **Making a file public WIDENS access, so it never
+    happens in one call** (AV-2986): `update_skill_asset` with `visibility: "public"`
+    on a private file, and `upload_skill_asset` with `visibility: "public"`, return
+    `pending_confirmation` with a `confirmationId` — the upload has ALREADY stored the
+    file as PRIVATE, and only `confirm_action` (after the person's "yes" to the
+    `summary`) publishes it. An org key without a person (`blocked`) and the
+    configuration architect cannot publish; making a file private or editing the
+    description goes through directly.
   - Agents with the skill ENABLED see a catalog line per attachment in the skill's
     prompt block and cite `asset://<slug>/<name>` directly in `renderizar_imagem`,
     `renderizar_pdf`, `criar_pagina_web` (`imagens[].url`) and `criar_documento`
@@ -2212,8 +2733,17 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   (requires access to the agent: yours, or one of your organizations').
   **`mcp__afl__enable_agent_skill`** `{ agent_id, skill_id, config? }` (`agents:write`)
   turns a skill on for that agent; **`mcp__afl__disable_agent_skill`**
-  `{ agent_id, agent_skill_id }` (`agents:write`) removes it — use the `agent_skill_id`
-  from `list_agent_skills`, not the `skill_id`.
+  `{ agent_id, agent_skill_id, remove? }` (`agents:write`) switches it OFF and keeps its config
+  (AV-2947); only an explicit `remove: true` deletes the link and the config — use the
+  `agent_skill_id` from `list_agent_skills`, not the `skill_id`.
+  **`mcp__afl__update_agent_skill`** `{ agent_id, agent_skill_id, config }` (`agents:write`,
+  AV-2979) changes the CONFIG of a skill already on the agent — the screen's "Configure" — without
+  disabling or re-enabling it (`enable_agent_skill` on an already-enabled skill is a 409). `config`
+  is MERGED over the current one: only the keys you send change, `null` deletes a key, and a
+  `secret` field you omit (or send as `'***'`, the masked value reads return) keeps the stored
+  secret — send a new value to replace it, `""` to clear it. The response carries the MASKED
+  config; secrets never come back. Same authorization as the screen (owner of a personal agent /
+  member of the agent's org) and same validation against the skill's `parameters_schema`.
   **Skill requirements:** a skill may declare `requires` (shown by `list_skills`/`get_skill`,
   e.g. `{ "plugin": "legal_research", "scope": "organization" }` on `native-pesquisa-juridica`).
   It only works on an **organization agent** whose org has that plugin **enabled**. Otherwise
@@ -2239,6 +2769,129 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
   pitfalls). So enabling one grants **instruction, not capability** — enabling fifteen just
   inflates the prompt. To grant capability, connect the integration/source and allow writes.
 
+### Share an agent with another person
+
+Sharing a **personal** agent is consent between two people, so the hub keeps the person in
+the loop. Two tools:
+
+- **`mcp__afl__list_agent_shares`** `{ direction?: "sent"|"received"|"all", status?:
+  "pending"|"accepted"|"rejected"|"disabled", page? }` (`agents:read`). `sent` = who you gave
+  one of your agents to; `received` = invitations and agents other people shared with you.
+  Each item: `shareId`, the agent (`id`, `name`), the other person (`id`, `name` — never the
+  e-mail; a name that is only an e-mail comes masked), `status`, `isActive`, the **effective**
+  `permissionLevel` and `permissionLevelDeclared` (`false` = a legacy row with no level, which
+  counts as `conversar`). 50 per page.
+- **`mcp__afl__manage_agent_share`** `{ action, agent_id?, email?, share_id?,
+  permission_level?, message?, confirm? }` (`agents:write`). Actions:
+  - `share` — `agent_id` (yours) + `email` of the person; optional `permission_level`
+    (default `conversar`) and `message`. **Returns `pending_confirmation`** with a summary
+    naming the agent, the person and the level — **nothing is shared until `confirm_action`**.
+    Show the summary to the user and confirm only after their "yes". The person then gets an
+    invitation and only uses the agent after accepting it.
+  - `accept` (`share_id` of a RECEIVED invitation) — also **`pending_confirmation`**: you
+    start using someone else's agent. `reject` executes immediately.
+  - `activate` / `deactivate` (`share_id` of a received, already accepted share) — immediate.
+  - `set_level` (`share_id` of a SENT share + `permission_level`) — **lowering (or keeping) is
+    immediate; raising returns `pending_confirmation`**. Levels, weakest first: `conversar`
+    (talk only, no tools) < `consultar` (read tools) < `solicitar` (asks; actions become
+    confirmations for the owner) < `executar`.
+  - `revoke` (`share_id` of a SENT share) — needs **`confirm: true`** in the same call (like
+    the `delete_*` tools); without it nothing is touched. The other person loses the agent and
+    only gets it back with a new invitation.
+
+  Who may do what is decided server-side by the same rules as the AFL screen: only the
+  agent's **owner** shares, changes the level and revokes; only the **recipient** accepts,
+  rejects, activates and deactivates. Someone else's agent or invitation comes back
+  `blocked` ("não encontrado entre os seus") and nothing changes. Confirming needs
+  `tools:write` (the `confirm_action` scope); a confirmation only works for the user who
+  created it. An **organization key** (no person behind it) cannot use `manage_agent_share`,
+  and the configuration architect never shares (out of its perimeter). Find the agent id
+  with `list_agents` and the share id with `list_agent_shares`.
+
+### The user's files — list, share, revoke, delete
+
+The files the agents generated for the user (images, documents, HTML pages, reports) and
+the ones they uploaded — the AFL "Arquivos" screen. Three tools with the **same names and
+the same executor as the Alter**; **no `agentId`** (a file belongs to the person, not to an
+agent):
+
+- **`mcp__afl__meus_arquivos`** `{ origem?: "meus"|"compartilhados_comigo", tipo?, busca?,
+  periodo?, limite?, organization_id? }` (`tools:read`). Newest first, each with `id`, type,
+  title, date, `url` and `file_key`. `origem: "compartilhados_comigo"` lists files OTHER
+  people shared with the user — those come **without `file_key`** and with the share link
+  (`share.…/d/<id>`), which re-checks access on every open. A failed lookup comes back as an
+  **error, never as an empty list** — do not report "nobody shared anything" from an error.
+  Unlike `listar_paginas_web`, this sees every type, not only HTML pages.
+- **`mcp__afl__compartilhar_arquivo`** `{ op, arquivo_id? | file_key?, emails?, grupos_ids?,
+  usuarios_ids?, publico?, prazo?, sem_prazo?, avisar?, mensagem? }` (`tools:write`):
+  - `ver` — who has access, whether it is public, deadline and link (third-party e-mails
+    come masked).
+  - `compartilhar` — **adds** people (`emails`; they need an AFL account — the answer lists
+    the ones that do not), groups of the file's organization (`grupos_ids`, organization files
+    only) or `publico: true` (anyone with the link, no login). Adding someone new, making it
+    public or extending/removing the deadline **returns `pending_confirmation`** — nothing is
+    shared until `confirm_action`; show the summary and confirm only after the user's "yes".
+    Re-adding someone who already has access or shortening the deadline applies at once.
+  - `remover` (take people/groups off) and `revogar` (back to private, everyone off) — immediate.
+- **`mcp__afl__excluir_arquivo`** `{ arquivo_id? | file_key? }` (`tools:write`) — **always
+  `pending_confirmation`**, and the summary says who the file is shared with today. After
+  `confirm_action` the share link stops opening for everyone; download links sent earlier are
+  not reached (the summary says so).
+
+Only the file's **owner** shares, revokes or deletes — same rules as the screen (people must be
+active members in an organization file, groups must belong to that organization). Someone
+else's file comes back as "not found" and nothing changes. An **organization key** (no person
+behind it) cannot use any of the three, and the configuration architect never touches files
+(out of its perimeter).
+
+### The user's platform inbox (/inbox)
+
+The AFL inbox — reports, alerts, insights, tasks, invitations and notices that agents,
+automations and squads left for the user. **Not** e-mail (Gmail/Outlook have their own
+tools). One tool with the **same name and executor as the Alter**, **no `agentId`**:
+
+- **`mcp__afl__gerenciar_inbox`** `{ op, pasta?, busca?, pagina?, mensagem_id? }`:
+  - `listar` (`tools:read`) — the screen's folders: `entrada` (default: unread and not
+    archived), `todas` (not archived), `arquivadas`, or a type (`report`, `alert`, `insight`,
+    `task`, `whatsapp`, `invitation`, `system`); `busca` over title/content; 25 per page
+    (`pagina`, and `tem_mais` says there is more). Each item has its numeric `id`.
+  - `ler` (`tools:read`) — the full content of one message. It **marks it as read**, as
+    opening it on the screen does.
+  - `marcar_lida`, `arquivar`, `desarquivar` (`tools:write`) — immediate; they set the state
+    (repeating is safe). Archiving also marks as read, as on the screen.
+  - `excluir` (`tools:write`) — **permanent**: always `pending_confirmation`; nothing is
+    deleted until `confirm_action` — confirm only after the user's "yes".
+
+Only the token user's own messages (someone else's id = "not found"). An unavailable inbox
+comes back as an **error, never as an empty inbox**. Accepting an invitation that arrived in
+the inbox is **not** done here (it changes access) — use the tool of that subject or the
+screen. Organization keys (no person) and the configuration architect are refused.
+
+### Agent embed widget (/agent-embed)
+
+The widget that puts one of the user's **personal** agents on an external website. Same name
+and executor as the Alter, **no `agentId`**. **The embed token and the paste-in code never come
+back through the hub** — viewing the code and regenerating the token are screen-only
+(/agent-embed), by the owner's decision; point the user there.
+
+- **`mcp__afl__gerenciar_widget`** `{ op, widget_id?, agente_id?, dominios_permitidos?,
+  adicionar_dominios?, remover_dominios?, liberar_qualquer_site?, ativo?, titulo?, subtitulo?,
+  cor?, posicao?, mensagem_boas_vindas?, texto_do_campo?, mostrar_avatar? }`:
+  - `listar` / `ver` (`tools:read`) — allowed domains (`qualquer_site: true` = empty list =
+    ANY site), on/off, appearance, usage.
+  - `criar` (`tools:write`) — `agente_id` + initial domains (host only, e.g. `shop.com`) and
+    appearance. **Always `pending_confirmation`** (it arms a public token).
+  - `atualizar` (`tools:write`) — what **widens** who reaches the agent returns
+    `pending_confirmation`: adding a domain, `liberar_qualquer_site`, turning it back on
+    (`ativo: true`). Narrowing (removing a domain — never down to an empty list —, `ativo:
+    false`) and appearance/messages apply at once. In an edit, use `adicionar_dominios` /
+    `remover_dominios`, never a whole `dominios_permitidos` list.
+  - `excluir` (`tools:write`) — `pending_confirmation`.
+
+Only the agent's owner (same rule as the screen). Voice, file upload, mandatory visitor name
+and session/message limits stay screen-only. Organization keys and the configuration
+architect are refused.
+
 ### Manage data sources
 
 Data sources (Jira/Notion/Google/DB/API…) are a **separate** subsystem from skills —
@@ -2256,7 +2909,10 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   lists the connected integrations (personal and/or the org's) with the identity of the
   account behind each: `connected`, `connectionStatus`, `grantedScopes` (which is what
   separates "expired token" from "that account never authorized this service") and
-  `needsReconnect`. Org scope needs membership (member is enough). The personal scope
+  `needsReconnect`. Org scope needs membership (member is enough) and applies the screen's
+  **group filter** (AV-2954): a connection restricted to groups you are not in is not listed;
+  if the filter cannot be checked, the org scope is refused/omitted (`partial`), never listed
+  unfiltered. The personal scope
   includes the **OAuth** integrations (Microsoft 365, Google, Jira, Notion — type
   `microsoft_365`, `google_services`, …), whose uuid is the `integration_uuid` of
   `create_data_source`; before AV-2280 it only showed credential-based ones, and a connected
@@ -2279,6 +2935,38 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   (`connectionStatus: "error"`): customer data, not a bug — but whoever picks **by name**,
   and an LLM picks by name, is guessing. **Always pick by `integrationUuid`.** With no
   collision the field is absent and the response is unchanged.
+- **`mcp__afl__delete_integration`** `{ integration_uuid, organization_id? }`
+  (`datasources:write`, AV-2954) — the screen's "Excluir" for an **organization**
+  connection (uuid from `list_integrations` with `scope: "organization"`). It only
+  **disconnects**: the credential goes, the row stays, and the org sources that depend on
+  it **stop** ("Parada") and come back by themselves when the **same** credential is
+  reconnected — nothing is deleted. The call **never disconnects**: it returns
+  `pending_confirmation` with a `confirmationId` and a `summary` naming the sources and
+  agents that stop; show the summary to the person and only then `confirm_action`
+  (`tools:write`). Owner/admin with **active** membership only (checked again on confirm);
+  an org key without a person and an architect session are refused. **Personal** (AV-3065):
+  with no `organization_id` (and a token not bound to an org) it disconnects one of YOUR
+  integrations (uuid from `list_integrations` with `scope: "personal"`) — the same card:
+  the summary names YOUR sources that stop and the agents linked to them, nothing happens
+  until `confirm_action`, and reconnecting the same credential brings everything back.
+  Only your own integration (another person's is not found → `blocked`); a key without a
+  person and an architect session are refused here too. Databricks (personal or org) is
+  disconnected in the UI. Through the conversation, the same
+  operation (plus switching the credential mode `login_pessoa` ⇄ `conta_servico` and
+  revoking **your own** per-person login) is `gerenciar_integracoes` on the Alter.
+- **`mcp__afl__update_integration_groups`** (`datasources:write`, AV-3050)
+  `{ integration_id, organization_id?, group_ids }` — **which groups of the org reach an
+  ORG integration** (the "Acesso por grupo" selector on the integration page). `group_ids`
+  is the **final** list (REPLACE); `[]` = the whole organization. Same rule as the screen,
+  decided by the b2b: active org admin/owner sets any scope; a **group admin** only the
+  groups they administer, never org-wide, and only on an integration whose current groups
+  are all theirs. Every group must belong to the org (else refused) and the integration must
+  be the org's (else 404). **Widening** (adding a group, or `[]` on a restricted
+  integration) returns `pending_confirmation` + `confirmationId` and writes nothing until
+  `confirm_action`; **restricting** writes immediately and echoes `groupScope`
+  (`{ resourceId, groupIds, orgWide }`). An architect session or a key without a person
+  can only restrict. A read failure while evaluating is refused (503) — never "allowed".
+  Not in the architect's perimeter (who reaches a credential is a person's call).
 - `mcp__afl__list_data_sources` (`datasources:read`) → `{ personal, organization }`.
   `scope: "all"` (the default) no longer blows up in a runtime error, and
   `scope:"all"` + `fields:"full"` is a valid combination.
@@ -2337,6 +3025,19 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   A source is created **read-only** unless you pass
   `allow_agent_write: true` — plan for that: a fresh source + connect is not enough for
   the agent to write anywhere.
+  - **`database_table` only POINTS at an existing database connection (AV-2983):**
+    `config.connectionId` (the connection's id — see `list_integrations`, `type: "database"`)
+    + `config.databaseTable` (`schema.table`) or `config.dbQuery` (read-only, `SELECT`). The
+    connection must be in the call's scope: your personal one, or — with `organization_id`,
+    org admin/owner — one of THAT org's (a personal connection does not serve an org source).
+    Missing `connectionId` → refused with `DATABASE_CONNECTION_REQUIRED` listing the scope's
+    connections (no secrets). Refused, nothing created: another person's/org's connection
+    (`DATABASE_CONNECTION_NOT_IN_SCOPE`), a deleted one (`DATABASE_CONNECTION_DISCONNECTED`),
+    a query that writes (`DATABASE_QUERY_NOT_READ_ONLY`), a table name that is not an
+    identifier (`DATABASE_TABLE_INVALID`), and any credential in `config` — password,
+    token, connection string or a URL with `user:password@` (`SEGREDO_NA_CONVERSA`). A new
+    connection or a new password goes through `request_credential_connection` `type: "database"`.
+    If the connections can't be checked the call fails closed (`DATABASE_CONNECTIONS_UNAVAILABLE`).
   - **`microsoft_365_data` says WHICH service it reads, in `config.serviceType`:**
     `outlook_mail`, `outlook_calendar`, `onedrive`, `sharepoint`, `excel` or `teams`
     (e.g. the user's Outlook calendar → `{ "serviceType": "outlook_calendar" }`).
@@ -2485,7 +3186,7 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     Same rule: changing the scope re-crawls; nothing indexed outside it is removed.
 - **`mcp__afl__update_data_source`** (`datasources:write`):
   `{ data_source_id, organization_id?, allow_agent_write?, write_permission_note?, name?,
-  description?, config?, integration_uuid?, sync_frequency?, is_active? }` — edits a source
+  description?, config?, integration_uuid?, sync_frequency?, is_active?, group_ids? }` — edits a source
   and, above all, **toggles whether the agent may WRITE to it** (`allow_agent_write`, the
   "Permitir escrita" switch in the AFL UI). Without it the provider's write tools (create a
   Jira issue, send mail, edit a sheet/page) are **not exposed to the agent**, even with the
@@ -2493,6 +3194,44 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   resolution as `get_data_source` (personal first, then the org — org needs admin/owner);
   only the fields you send change, and `config` is **merged**. Takes effect immediately (the
   connected agents' toolset cache is invalidated).
+  - **WhatsApp source (`whatsapp_data`) — the service keys of the screen (AV-3009).** On a
+    WhatsApp source, `config` accepts ONLY the keys the source screen writes, with its enum and
+    limits: `selectedChats` (`[{ jid, name? }]`; `[]` = the WHOLE number; JIDs come from the
+    number's address book), `inboundResponseEnabled` (answer alone), `allowUnknownContactsResponse`,
+    `graceWindowMinutes` (0–30; 0 = right away), `conversationClosingBehavior` /
+    `groupClosingBehavior` (`close_on_affirmation` | `always_continue` |
+    `never_respond_affirmations`), `conversationClosingMessage` / `groupClosingMessage` (text up
+    to 4096; `""` = send nothing), `groupResponseEnabled`, `groupContactInitiatedMode` /
+    `groupAgentInitiatedMode` (`respond_all` | `respond_mention_only` | `no_response`),
+    `groupOnlyReplyToAgentInitiated`, `groupReplyWindowMinutes` (5–480). An unknown key or an
+    invalid value is **refused and nothing is written** (`configUuid` — the number — does not
+    change here; `autopilotEnabled`/`autopilotMode` decide nothing). **Widening** what the agent
+    answers ALONE to third parties (turning answering on, unknown contacts, groups, a more open
+    mode, a shorter grace window, a longer group window, a new chat in the scope or the whole
+    number) returns `pending_confirmation` — confirm with `confirm_action` after showing the
+    summary; **restricting** writes directly. A key the source does not have yet inherits the
+    number's value, so there only the most restrictive value skips the confirmation. The
+    confirmation is the Alter's (`gerenciar_fontes_dados`), so the accept re-checks ownership
+    (personal) or org admin/owner (org source).
+  - **`group_ids` — "Acesso por grupo" of an ORG source (AV-3050).** Same contract as
+    `update_integration_groups` above: final list (REPLACE), `[]` = the whole org, the
+    screen's rule (decided by the b2b, so a group admin can do it alone — with `group_ids`
+    only, the call does not require org admin), groups of the org only. **Widening** returns
+    `pending_confirmation` and must go **alone** (with other fields it is refused and
+    nothing is written); **restricting** writes and the answer carries `groupScope`. On a
+    personal source it is refused. The architect may only restrict.
+  - **A service that only READS cannot be made writable** (AV-2929). `allow_agent_write:
+    true` on a Teams **meetings**, GA4, Google Meet or Databricks source is **refused and
+    nothing is written**: those services have no write path, and the old
+    `"allowAgentWrite": true` answer made callers believe the agent could write. Changing a
+    meeting or event (category, time, attendees) is a write on the **calendar** source
+    (Outlook or Google) — enable it there. Every other source type (Slack, MCP, custom API,
+    Jira, Sheets…) accepts the flag as before. The check runs on the source as it will be
+    AFTER the update: switching a meetings source to the calendar and enabling writes in
+    the same call works, and an update that turns a writable source into a read-only
+    service also turns `allowAgentWrite` off — it shows in `updated`, and the answer's
+    `writeDisabled` says why. Any update on a read-only service whose `allowAgentWrite`
+    was still `true` (legacy) does the same; tell the user, do not hide it.
   - **Same Google rule here, and this is the fix for a source already broken.**
     Sending `config: { googleSourceType: "calendar" }` now updates the **column the
     runtime reads** as well, not just the config — before, the config changed, the
@@ -2543,6 +3282,31 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
     API at all. Now any update on an MCP source re-derives the column from its integration
     (or from `integration_uuid` when you send one), and the answer carries
     `mcpConnectionLinked` so you can confirm it took.
+- **Operating a source** (AV-2957 — the screen's buttons; the scope is the SOURCE's record,
+  `organization_id` only restricts; an org source needs an ACTIVE membership and that you see
+  it through group access — outside it = not found):
+  - **`mcp__afl__sync_data_source`** `{ data_source_id, organization_id?, reindex?, force? }`
+    (`datasources:write`) — no flags = "Sincronizar" (synchronous sources such as MCP/database
+    return the outcome; a failed outcome is an error, never "synced"). `reindex: true` =
+    incremental reindex; `reindex: true, force: true` = FULL reindex (re-embeds everything —
+    quota cost): owner of a personal source, org **admin/owner** for an org source, and refused
+    for the configuration architect and for an org key without a person. `queued: false` means
+    NOTHING was enqueued (one already running, or a live-read source) — not success.
+  - **`mcp__afl__test_data_source_access`** `{ data_source_id, organization_id? }`
+    (`datasources:read`) — "Testar acesso" for Google Drive file sources, read-only.
+    `verdict`: `ok`; `indisponivel` = Google/credential did not answer NOW (retry; it is **not**
+    a revoked credential); `credencial` = the account does not reach the files (reconnect);
+    `arquivos` = deleted/unshared file or bad id (edit the source). Other source types = 400 with
+    the code.
+  - **`mcp__afl__get_data_source_index_status`** `{ data_source_id, organization_id? }`
+    (`datasources:read`) — index counts by state, last indexing, failed items (name, reason,
+    attempts) and the source's `lastError`. A part that could not be read comes back
+    `available: false` with the reason — **never read it as zero documents**.
+  - Which automations use a source: `list_automations { data_source_id }` (below).
+- **Org source account check** (AV-2957): `create_data_source`/`update_data_source` with
+  `organization_id` and an `integration_uuid` refuse (blocked, nothing written) a PERSONAL
+  account, another organization's connection or an account of the wrong provider — an org
+  source only reads connections of its own organization.
 - **`mcp__afl__delete_data_source`** (`datasources:write`)
   `{ data_source_id, organization_id?, confirm: true }` — deletes a source, personal or of
   the organization. `confirm: true` is **required**. The scope is the SOURCE's, read from its
@@ -2551,14 +3315,112 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   without the role). `organization_id` only restricts; a token bound to an org only reaches
   that org's sources. The source's agent links go with it (connected agents lose its tools at
   once). "Could not verify the scope" is **not** "source missing" — retry, never recreate.
+- **`mcp__afl__request_credential_connection`** (`datasources:write`)
+  `{ type: "jira" | "notion" | "custom_api" | "databricks", organization_id?, group_id?, site_url?, email?, page_url?, integration_id?, name?, base_url?, auth_type?, workspace_url?, workspace_name?, mode? }`
+  — a connection that needs a SECRET (Jira API token, Notion Integration Secret, custom API credential, Databricks client secret) is never typed through the hub: this returns a **one-time link**
+  (`url`, valid 30 min, `ref`) to a platform form where the PERSON, logged in as themselves, types
+  the token. There is no secret parameter on purpose — never ask for the token in the chat. Show
+  the `url` to the person; don't open it for them. `site_url`/`email` are only suggestions
+  (internal addresses are refused; a site outside `*.atlassian.net` only shows a warning on the
+  form). Organization: active admin/owner or group admin only (403 otherwise); a key with no
+  person is refused. Asking again for the same type and scope kills the previous link.
+  Notion (AV-3062): `page_url` is only a suggestion; `integration_id` (from `list_integrations`)
+  makes it the link to **replace the secret of THAT connection** — the form only writes there
+  (submitting it for another connection, or as a new one, is refused with
+  `CONNECTION_INTENT_MISMATCH`). Without it, the link connects a new bot.
+  **Custom REST API** (`type: "custom_api"`, `{ name?, base_url?, auth_type? }` with
+  `auth_type` = `none | bearer | api_key | basic | query_params`): the same one-time link —
+  the token, key, user/password or secret query params are typed only on the form, never
+  here. The base URL is the connection's identity (the same URL in the same scope →
+  `INTEGRATION_ALREADY_CONNECTED`). Before saving, the form **tests the API at the declared
+  URL** (internal addresses refused, redirects NOT followed — the credential never goes to
+  another address): 401/403 → `INTEGRATION_CREDENTIAL_INVALID`, a redirect →
+  `CUSTOM_API_TEST_REDIRECTED`, API down → `INTEGRATION_PROVIDER_UNAVAILABLE`; nothing is
+  saved on failure. There is no tool that takes a custom API secret.
+- **`mcp__afl__update_notion_connection`** (`datasources:write`)
+  `{ integration_id, name?, page_url? }` — renames / changes the reference page of one of YOUR
+  personal Notion connections, by the same rule as the Integrations screen. No secret here:
+  replacing the Integration Secret is `request_credential_connection(type: "notion", integration_id)`.
+  Someone else's (or a missing) connection → `NOT_FOUND`; nothing to change → `NOTHING_TO_UPDATE`.
+  Organization Notion connections: through the UI.
+  **Databricks** (AV-3060): `workspace_url`, `workspace_name` and `mode`
+  (`conta_servico` | `login_pessoa`) are suggestions; the service principal's client id/secret
+  or the customer's OAuth app are typed only on the form. A workspace pointing to an internal
+  network, cloud metadata (incl. IPv6 hex), `.internal` or plain http is refused (at the link,
+  at save time and on every request); a host outside `*.cloud.databricks.com` /
+  `*.azuredatabricks.net` / `*.gcp.databricks.com` only shows a warning. Organization: active
+  admin/owner of the ORG only (no group admin — Databricks has no groups). Rotating the secret
+  = a new link.
+- **`mcp__afl__keep_databricks_service_account`** (`datasources:write`, AV-3060)
+  `{ integration_uuid, organization_id? }` — the Databricks screen's "Manter conta de serviço":
+  confirms that everyone using a `conta_servico` connection reads with the SAME account (the
+  service principal), and the connection's warning goes away. Never writes on the call: returns
+  `pending_confirmation` + `summary`; only `confirm_action` applies it (checked again by the
+  workflow). Org: active owner/admin; personal: the owner. A key with no person and an architect
+  session are refused. Disconnecting Databricks stays in the UI (it deletes the connection).
+- **`mcp__afl__get_credential_connection`** (`datasources:read`) `{ ref }` — the outcome of that
+  link: `state` = `pendente | concluida` (with `integrationId`) `| esgotada` (5 failed submits)
+  `| vencida | substituida`, plus `failures` and `lastErrorCode` (a code, never the secret). Only
+  the link's owner reads it. Confirm the fact with `list_integrations`.
+- **Database connections** (AV-3061). **Connect** = `request_credential_connection`
+  `{ type: "database", name?, db_type?, db_host?, db_port?, db_name?, db_user?, organization_id? }`:
+  the platform's database form, which TESTS the connection before saving; the password is typed
+  only there. `db_host` is just the address (internal/metadata hosts are refused). An
+  organization connection is the WHOLE org's: only an active org **admin/owner** (a group admin
+  is refused). **Change the password** (or revive a deleted one) = the same tool with
+  `connection_id` — the form PATCHes that connection in place, so its `database_table` sources
+  keep working. They show up in `list_integrations` as `type: "database"` (the `integrationUuid`
+  is the `config.connectionId` of a `database_table` source; a deleted one has `connected: false`).
+  - **`mcp__afl__update_database_connection`** (`datasources:write`)
+    `{ connection_id, organization_id?, name?, db_name?, db_user? }` — no secret. Renaming saves
+    directly; changing `db_name`/`db_user` returns `pending_confirmation` (`confirm_action`): the
+    sources start reading another database/identity (tested before saving). Host, port or type
+    need the password → use the link with `connection_id`.
+  - **`mcp__afl__delete_database_connection`** (`datasources:write`)
+    `{ connection_id, organization_id? }` — always `pending_confirmation`; the summary lists the
+    `database_table` sources that STOP. Deleting removes only the password (the row stays);
+    reconnect with the link to bring the sources back.
+- **WhatsApp (AV-2958).** There is **no** tool that pairs a number — the QR is read by the
+  person's phone, in the logged-in screen:
+  - **`mcp__afl__get_whatsapp_pairing_link`** (`datasources:read`) `{}` — the `url` of the
+    personal WhatsApp pairing screen (`/integracoes/whatsapp`). Hand it to the person; the
+    number's data source is born with the pairing (link it with `connect_agent_data_source`).
+    To RECEIVE something on one's own WhatsApp no pairing is needed. A key with no person is
+    refused.
+  - **`mcp__afl__sync_whatsapp_contacts`** (`datasources:write`) `{ config_uuid? }` — rebuilds
+    the **agenda** (contacts and groups) of the token owner's **personal** number — the
+    screen's "Sincronizar". Light (sends nothing, deletes no conversation); a partial sync is
+    reported as failure; a Cloud API number has no agenda (refused). With more than one
+    personal number, `config_uuid` is required. Org numbers: the org page.
+  - **`mcp__afl__get_org_whatsapp_policy`** (`datasources:read`) / **`mcp__afl__update_org_whatsapp_policy`**
+    (`datasources:write`) `{ organization_id?, member_personal_whatsapp?: allowed|blocked,
+    org_agent_on_personal_number?: not_allowed|direct_only|org_groups|unrestricted }` — the
+    organization's WhatsApp policy card (RN-02: may a private number be paired in the org;
+    RN-05: how far an org agent answers on a personal number). Active owner/admin only (also
+    for reading). **Restricting** saves directly (audited like the screen); **widening**
+    returns `pending_confirmation` — show the summary, then `confirm_action`. A key with no
+    person and an architect session cannot widen.
+  - **`mcp__afl__remove_org_whatsapp_number`** / **`mcp__afl__restore_org_whatsapp_number`**
+    (`datasources:write`) `{ config_uuid, organization_id? }` — the screen's remove/restore of
+    an **organization** number (`config_uuid` is the end of
+    `/organizations/:orgId/integracoes/whatsapp/:configUuid`). Always a card: removing names
+    what goes (session, the number's data sources and agent links — **deleted** —, automations
+    that send through it); conversations stay. Restoring brings the number back
+    **disconnected** (pair again; sources and links are redone). Active owner/admin only,
+    rechecked on confirm; a key with no person and an architect session are refused.
+  Through the conversation (Alter), `gerenciar_integracoes` has `sincronizar_contatos` and
+  `configurar_whatsapp` (autopilot limits and message retention of the person's own number;
+  turning retention on or shortening it deletes old messages → card), and
+  `gerenciar_agentes atualizar` takes `autoApproveWhatsappMessages` (the agent's half of the
+  no-approval send; ON = card, inert without the person's master switch).
 - **`mcp__afl__create_mcp_connection`** (`datasources:write`)
-  `{ name, url, headers?, auth_type?, auth_value?, oauth_client_id?, oauth_client_secret?, oauth_scopes?, dedupe_by_url? }` — registers an external
+  `{ name, url, headers?, auth_type?, auth_value?, oauth_client_id?, oauth_client_secret?, oauth_scopes?, dedupe_by_url?, organization_id? }` — registers an external
   MCP server as a connection and discovers its tools (handshake + `tools/list`), returning the
   `integrationUuid` plus the tool catalog with the ids a data source needs. This is what lets you
   build an `mcp_server` source without the UI: feed the uuid into `create_data_source` with
   `config: { selectedToolIds, selectedToolsMetadata }`. Idempotent by URL; the same URL with a
   DIFFERENT credential is refused (it never overwrites another account's credential). Personal
-  scope only — an org MCP connection is still a UI step. The URL must be publicly reachable
+  scope by default. The URL must be publicly reachable
   (private IPs, internal hosts and cloud metadata endpoints are blocked).
   **Servers that require login (OAuth)**: `auth_type: "oauth"` (+ `oauth_client_id?`,
   `oauth_client_secret?`, `oauth_scopes?`; never with `auth_value`/`headers`). The connection is
@@ -2575,8 +3437,52 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   **`mcp__afl__delete_mcp_connection`** `{ integration_uuid }` (`datasources:write`) removes
   YOUR personal connection. It **refuses while any of your `mcp_server` sources still uses
   it** (they would go inert, failing only on their first run) — delete those with
-  `delete_data_source` first. Another user's connection, or a non-MCP integration, is not
-  found.
+  `delete_data_source` first, or just **disconnect** it with `delete_integration` (card with
+  the impact; the sources stop and come back on reconnect). Another user's connection, or a
+  non-MCP integration, is not found.
+  **Personal edit and sync** (AV-3063): `update_mcp_connection` / `sync_mcp_connection`
+  without `organization_id` (token not bound to an org) act on YOUR personal connection.
+  Only `name` changes (writes directly). `url`, `auth_type`, `auth_value`, `headers` and the
+  OAuth client are **refused** — the person changes server or credential in the connection
+  flow of the UI (`/integrations/mcp/<id>`); a credential never travels through an agent.
+  `sync_frequency`/`auto_sync_enabled` exist only on org connections (the personal catalog is
+  read live). `sync_mcp_connection` re-reads the catalog with the saved credential (OAuth:
+  your login; without it, `needsAuthorization` + `connectUrl`) and returns `toolsCount` and
+  the tool ids/names. Another person's connection is `blocked`; a disconnected one asks you
+  to reconnect it first.
+- **Organization MCP connection** (AV-3052, `datasources:write`, org **admin/owner** with an
+  ACTIVE membership — the same rule and the same handler as the organization's Integrations
+  screen). Find connections with `list_integrations({ scope: "organization", integration_type: "mcp" })`.
+  - `create_mcp_connection({ ..., organization_id })` creates it **directly** (no dedupe;
+    `dedupe_by_url` is refused). The catalog is read in the background — check it with
+    `sync_mcp_connection`. OAuth: the response carries YOUR `authorization.connectUrl`; each
+    member connects their own account. Creating does not reach any agent by itself: tools
+    reach an agent only through an `mcp_server` source linked to it.
+  - **`mcp__afl__update_mcp_connection`** `{ integration_uuid, organization_id?, name?, url?, auth_type?, auth_value?, headers?, sync_frequency?, auto_sync_enabled?, oauth_client_id?, oauth_client_secret?, oauth_scopes? }`
+    — only the sent fields change; a header with an empty value keeps the saved one. Changing
+    `url`, `auth_type`, `auth_value`, `headers` or the OAuth client returns
+    `pending_confirmation` (agents already using the connection would start talking to another
+    server/credential; the summary lists the affected org sources) → `confirm_action`. Rename,
+    `sync_frequency` and `auto_sync_enabled` write directly.
+  - **`mcp__afl__sync_mcp_connection`** `{ integration_uuid, organization_id? }` — re-reads the
+    catalog with the saved credential (OAuth: YOUR login; without it, `needsAuthorization` +
+    `connectUrl`). Returns `success` and `toolsCount`.
+  - **`mcp__afl__refresh_mcp_catalog`** `{ data_source_id, organization_id? }` (`datasources:write`)
+    — refreshes the catalog of an `mcp_server` **source** (the snapshot `list_mcp_tools` shows).
+    It re-discovers the connection (org: the same engine as `sync_mcp_connection`, admin/owner;
+    personal: the screen's live read, owner only) and rewrites the snapshot of the tools
+    ALREADY enabled: fresh description/schema/annotations, and tools the server no longer has
+    are removed. NEW tools are **not** enabled (that widens what linked agents can do): they
+    come back in `availableNotEnabled` with their metadata — enable them with
+    `update_data_source` (`config.selectedToolIds` + `config.selectedToolsMetadata`). Empty
+    catalog, missing OAuth login or a failed discovery = nothing is rewritten.
+  - `delete_mcp_connection({ integration_uuid, organization_id })` returns
+    `pending_confirmation`; the summary names the org sources that go inert. On confirm the
+    connection, its catalog tools and their permissions are removed and members' OAuth logins
+    revoked.
+  - A member without the admin role is `blocked`; a key bound to another org is denied; a key
+    without a person cannot change URL/credential or delete; the configuration architect does
+    not touch org MCP connections. The credential never comes back in any response.
   - **Once the source exists, its catalog is a first-class read and its tools run without
     an agent and without an LLM**: `mcp__afl__list_mcp_tools` → `mcp__afl__mcp_call_tool`
     (both `tools:read`, described under "Which tool to use"). Before them the catalog only
@@ -2764,7 +3670,7 @@ prose around it is confident.
   specific/literal terms before concluding there's no data — and remember that `[]` is a
   fact about the **index**, not about the corpus: it looks identical whether the document
   is missing, still processing, or `is_critical` (injected, never indexed). Check with
-  `gerenciar_documentos op: "listar"` before telling anyone the agent does not know it.
+  `list_knowledge_documents` before telling anyone the agent does not know it.
 - **Multi-turn:** keep the `conversationId` to preserve context across
   `chat_with_agent` calls.
 - **Report tool errors verbatim** to the user (don't silently swallow) — they usually
@@ -2968,7 +3874,12 @@ Notes that save a wrong conclusion:
   working on it, for as many correction rounds as you need. Only republishing is a human
   act, on the manage screen; there is no MCP equivalent. Never recreate the app.
   **The theme is not contract and does not need this** — see "Changing an app's look"
-  below.
+  below. `despublicar: true` is also a request of its own (AV-2948): alone
+  (`{ app_id, despublicar: true }`) it only takes the app down — no page rewrite, no LLM
+  cost, answered inline; with any other edit it takes it down and applies the edit (all
+  or nothing: a refused edit leaves the app live). An app already off the air answers
+  `unpublished: false, alreadyOffline: true` — nothing to take down, not an error. Ask
+  the user first: it cuts off everyone using the link.
 - **Owner-only.** Someone else's app answers `não encontrado` — 404, never 403, and the
   same answer as an id that never existed. Resolve ids with `listar_apps`.
 - **`usage` separates attempt from outcome — read all of it before concluding.**
@@ -2988,6 +3899,40 @@ Notes that save a wrong conclusion:
   the public-use flag: every visitor is refused until `update_agent { is_publishable: true }`
   (see the agent section). A visitor of a public app sees `agent_not_public` — a definitive
   refusal, never "try again".
+
+## The other views of the Apps screen, and the small edits (AV-2963)
+
+- **Three views, one tool — `listar_apps { view }`.** `mine` (default) is what the user
+  created. `available` is apps of OTHER people the user can open — granted to them, through a
+  group, or open to the organization — the same list as the screen's "Available to me" tab;
+  `reason` (`voce`|`grupos`|`organizacao`) filters why, `organization_id` picks the workspace
+  (absent = personal), `favorites: true` keeps only starred ones. Those apps are not theirs:
+  open and favorite, never edit. `workspace` is every PUBLISHED app of an organization,
+  read-only, **owner/admin ACTIVE only** — anyone else gets `status: "blocked"` with
+  `code: "NOT_ORG_ADMIN"`; it requires `organization_id`. In `mine`, `organization_id` now
+  goes to the server (active membership required — `blocked` instead of an empty list).
+  A read that fails comes back as an error with `reason: "indisponivel"` — never read it as
+  "no apps".
+- **Version trail and recipients — `get_app_web { incluir_versoes, incluir_compartilhamento }`.**
+  `versoes` is the page-replacement audit trail (last 20): author, when, whether the HTML
+  changed (hash) and whether the app was LIVE then (`wasExposed`). `compartilhamento` lists
+  who has access by name (people with name and e-mail, groups) and the share deadline —
+  owner-only, third-party e-mail: answer the owner with it, never forward it. Either one that
+  fails comes back as `{ indisponivel: true }`, not as "no versions"/"nobody".
+- **Favorite — `mcp__afl__favorite_app_web { app_id, favorite? }`** (`agents:write`). The star
+  of the Apps screen, for the user's own apps and for apps they can open. Personal preference,
+  no confirmation; idempotent. Not found and no access are the same answer.
+- **Title and display description — `editar_app_web { titulo, descricao }`.** They change
+  what the screen shows, also on a LIVE app, with no unpublish and no card. `descricao: ""`
+  clears it (the screen falls back to the creation brief). The `generationSpec` (creation
+  brief) is FROZEN and does not change — read `title` and `displayDescription` back from
+  `get_app_web`.
+- **Exact HTML — `editar_app_web { html }`.** The complete document becomes the new page
+  version **exactly as sent** — no LLM, answered inline (no `task_id`), no visual review.
+  Never together with `instrucao`. Same gates as a generated page: full document, only
+  declared actions, `afl.data` needs a data policy, external script/CSS/iframe refused (the
+  app runs only embedded code), images only platform `https`/`asset://`/`data:image`, 2 MB.
+  On a live app it takes effect at once and is recorded in the version trail (`wasExposed`).
 
 ## Linking one app to another — `navegacao`
 
@@ -3198,6 +4143,40 @@ app with a second link.
 
 So: **dispatch, then verify with the reader.**
 
+## Reports (the Relatórios tab of /artefatos) — `list_reports`, `get_report`, `favorite_report`, `delete_report`
+
+The reports an agent saved with `gerenciar_relatorios` (and the ones automations save) live
+in the **Relatórios** tab of `/artefatos`. The hub reaches them through the **same
+handlers that tab uses** (AV-3008); `gerenciar_relatorios` itself stays out of the hub
+(creating/updating depends on the chat turn). Owner-only everywhere: someone else's report
+answers "não encontrado" — the same answer as an id that never existed.
+
+- **`mcp__afl__list_reports`** `{ organization_id?, category?, search?, favorites?, archived?, limit?, page? }`
+  (`agents:read`) — the tab's filters. Context works like the tab: no `organization_id`
+  = **personal** reports only; with it (or with an org-bound token) = the reports saved in
+  that organization — never mixed. `archived: true` lists only the archived ones; absent
+  = only the non-archived. No content. **Paginated** (`limit` default 20, max 100;
+  `page` from 1): read `total`, `returned`, `hasMore` (`nextPage` when there is more) —
+  `hasMore: true` means there are more reports than you listed. A service failure comes
+  back as `available: false` (unavailable), **never** as an empty list.
+- **`mcp__afl__get_report`** `{ report_id }` (`agents:read`) — one report with its full
+  markdown `content` (archived ones included). Counts as a view, like opening it on the
+  screen. `report_id` must be the UUID from `list_reports`, never the title.
+- **`mcp__afl__favorite_report`** `{ report_id, favorite: true|false }` (`agents:write`) —
+  the star. **Sets** the state (repeating does not undo it); direct, no confirmation.
+- **`mcp__afl__delete_report`** `{ report_id, confirm: true }` (`agents:write`) — the tab's
+  **Excluir**: the row is deleted **permanently**, no way back. Without `confirm: true`
+  it is refused before anything reaches the server. Ask the user first and check with
+  `get_report`. To just take it out of the list (reversible), archiving is on the screen
+  or through the Alter (`gerenciar_relatorios` `action: "arquivar"`). A failure here says
+  `outcome: "unconfirmed"` — the deletion **may** have happened; re-check with
+  `get_report`/`list_reports` before repeating.
+- **Org-bound token:** `get_report`, `favorite_report` and `delete_report` only reach
+  reports saved in **that** organization — a personal report id answers "não encontrado".
+- **Architect:** `list_reports`/`get_report` are reads it may use (to check what an
+  automation or squad it built delivered); `favorite_report` and `delete_report` are out of
+  its perimeter.
+
 ## Known limitations (current)
 
 - **Writes are opt-in per source** (rule 6 above) — and destructive actions always
@@ -3219,8 +4198,9 @@ So: **dispatch, then verify with the reader.**
   matters, the proof is a read through the integration.
 - **An `mcp_server` source's tool catalog is a snapshot of its configuration** —
   `list_mcp_tools`/`mcp_call_tool` only see the tools recorded when the source was last
-  saved, so a tool added on the MCP server afterwards needs the source edited and saved
-  again. And **deletion never goes through `mcp_call_tool`**: that permission is per
+  saved, so a tool added on the MCP server afterwards needs `refresh_mcp_catalog` (which
+  refreshes the enabled ones and lists the new ones) and, to enable a new tool,
+  `update_data_source`. And **deletion never goes through `mcp_call_tool`**: that permission is per
   agent, so it goes through `chat_with_agent`.
 - **SharePoint covers the document LIBRARY, not the site** — navigation/read, upload,
   `create_file`, `create_folder`, `copy`, delete-to-recycle-bin. There is no site, modern page
@@ -3239,9 +4219,9 @@ So: **dispatch, then verify with the reader.**
   instructions.
 - **Squad context = the TOKEN's context (squads exist in both).** A token bound to an
   organization operates **that org's** squads; a token with **no** organization operates
-  **your personal** squads — all nine squad tools (`create_squad`, `update_squad`,
+  **your personal** squads — all sixteen squad tools (`create_squad`, `update_squad`,
   `update_squad_step`, `get_squad`, `list_squads`, `run_squad`, `list_squad_runs`,
-  `get_squad_run`, `delete_squad`). Until 09/2026 every squad tool refused a personal token
+  `get_squad_run`, `preview_squad_source_list`, `delete_squad`, `cancel_squad_run`, `retry_squad_step`, `rename_squad_run`, `run_squad_round`, `list_squad_rounds`, `get_squad_round`). Until 09/2026 every squad tool refused a personal token
   with `squads exigem um token com organização`, although personal squads existed (the
   native `gerenciar_squads` built them); that refusal is gone. What changes with no org:
   (1) the squad is born **personal** — only you see and trigger it; (2) **no groups** —
