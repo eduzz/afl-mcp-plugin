@@ -35,8 +35,14 @@ memory and do not copy it here.
 2. **Read the context.** `mcp__afl__architect_context { run_id, after_seq? }` →
    `{ motor, estado, fase, vez, motivoDaVez?, orientacoes, plano, perguntas, eventos,
    toolsDaFase, proximoPasso }`. Read `orientacoes` and follow them. `toolsDaFase` is the perimeter
-   of this phase (`{nome, classe}`): a tool not listed there is refused. Pass `after_seq` (the last
-   `seq` you saw) to get only new events.
+   of this phase (`{nome, classe, obrigatorios}`): a tool not listed there is refused. Pass
+   `after_seq` (the last `seq` you saw) to get only new events.
+   **Schemas:** you do NOT know the hub tools' argument names. Before proposing a step with `args`
+   or calling `architect_call_tool`, read the schema with
+   `architect_describe_tools { run_id, tool_names: [...] }` (up to 15; returns `inputSchema`,
+   `description`, `obrigatorios`, `classe`, `chamavelNaFase`) and use the EXACT argument names
+   (e.g. `create_automation` takes `personal_agent_id`, not `agent_id`). A guessed name fails
+   validation, the step fails and the plan has to be re-approved by the person.
 3. **Discover (read only).** `architect_map_account` and `architect_diagnose` (both `{ run_id }`),
    plus the read tools in `toolsDaFase`. Discovery never writes, and writing **data** (sending an
    e-mail, creating a Jira issue, editing a Notion page) is never part of an architect run.
@@ -46,8 +52,9 @@ memory and do not copy it here.
    The person may also answer on the screen; re-read `architect_context` before asking twice.
 5. **Propose.** `architect_propose_plan { run_id, objetivo, motivoDaMudanca?, passos[] }`. Each
    step: `{ titulo, detalhe?, acaoTipo, toolName, alvo, args | semArgs, destrutivo, verificacao? }`.
-   - Give **complete `args` whenever you can**: after approval the platform runs those steps on its
-     own. Use `semArgs` (a short string saying WHICH value is not knowable yet) only when the args
+   - Give **complete `args` whenever you can** (with the exact names from
+     `architect_describe_tools`): after approval the platform runs those steps on its own, and the
+     required arguments are checked when you propose. Use `semArgs` (a short string saying WHICH value is not knowable yet) only when the args
      depend on something you will learn during execution; you will run that step yourself. In
      `architect_context`, `semArgs` comes back as a boolean (`true` = tool step without args).
    - A resource created by an earlier step is referenced as `{"$passo": n, "campo": "id"}`.
@@ -62,8 +69,8 @@ memory and do not copy it here.
    `vez: "plataforma"` the platform is running the steps with args: **do not write**. When
    `vez: "cliente"`, read `proximoPasso` and the plan: steps with `semArgs` and failed steps are
    yours.
-8. **Your steps.** Every write goes through
-   `architect_call_tool { run_id, tool_name, args }` — it matches the pending step and enters the
+8. **Your steps.** Read the step tool's schema first (`architect_describe_tools`). Every write goes
+   through `architect_call_tool { run_id, tool_name, args }` — it matches the pending step and enters the
    undo record. Then `architect_mark_step { run_id, passo, estado: "executado"|"pulado"|"falhou",
    resultado_ref?, erro? }` with what the tool actually returned.
 9. **Verify and conclude.** `architect_verify_plan { run_id }` (read), fix what it flags (again via
@@ -72,6 +79,15 @@ memory and do not copy it here.
 
 ## Rules
 
+- **Schema before args.** Before proposing a step with `args` or calling `architect_call_tool`,
+  read the schema with `architect_describe_tools` and use the EXACT argument names; prefer
+  proposing the step with complete `args` (the platform runs it and validates the required ones at
+  proposal time).
+- **Validation refusal ≠ failure.** If `architect_call_tool` on a step you compose (no approved
+  `args`) comes back refused only by argument validation, the step **stays pending** ("tentativa n
+  de 3"): fix the arguments from the error and the schema and call again — do **not** propose a new
+  plan. After the 3rd validation refusal the step fails. Any other error (5xx, timeout, 409) fails
+  the step as before, and a step approved with full `args` still needs a new plan to change them.
 - **FACT before claims.** Read the result of every tool before saying something exists, ran or
   worked. A step is `executado` only if the tool returned success with the resource.
 - **Never call `create_agent`, `update_squad`, `create_data_source`, … directly during a run.** A

@@ -2155,7 +2155,12 @@ UI (`url`).
 **Client engine (`motor: "cliente"`)** — the loop and its rules live in the `afl-architect`
 skill; the tools, all `{ run_id, … }`:
 `architect_context { after_seq? }` (state, `fase`, `vez: cliente|plataforma`, `orientacoes` =
-the doctrine to follow, plan, questions, events, `toolsDaFase`, `proximoPasso`) ·
+the doctrine to follow, plan, questions, events, `toolsDaFase` `{nome, classe, obrigatorios}`,
+`proximoPasso`) ·
+`architect_describe_tools { tool_names[] }` (1–15 names → `inputSchema`, `description`,
+`obrigatorios`, `classe`, `chamavelNaFase`, from the run's hub session; unknown/out-of-perimeter
+names come back with `erro`. Read it BEFORE proposing a step with `args` or calling
+`architect_call_tool`, and use the EXACT argument names — prefer complete `args` in the plan) ·
 `architect_map_account` / `architect_diagnose` / `architect_verify_plan` (read) ·
 `architect_ask { perguntas[] }` (answers via `answer_architect_questions`) ·
 `architect_propose_plan { objetivo, motivoDaMudanca?, passos[] }` (steps `{ titulo, detalhe?,
