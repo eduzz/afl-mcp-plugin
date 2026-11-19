@@ -65,7 +65,7 @@ memory and do not copy it here.
    what runs without you) and call `approve_architect_plan { run_id, versao, destrutivos_aprovados? }`
    **only after an explicit "yes"**. Ask about each destructive step on its own. Never approve on
    your own initiative; the person may also approve on the AFL screen — then just carry on.
-7. **Wait for your turn.** Poll `architect_context` (every ~20 s, with `after_seq`). While
+7. **Wait for your turn.** Poll `architect_context` (every ~20 s, with `after_seq` and `sem_orientacoes: true` — the long `orientacoes` text does not change during a run). While
    `vez: "plataforma"` the platform is running the steps with args: **do not write**. When
    `vez: "cliente"`, read `proximoPasso` and the plan: steps with `semArgs` and failed steps are
    yours.
