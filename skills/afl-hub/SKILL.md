@@ -1675,6 +1675,20 @@ lacks it — surface verbatim):
   `squads:run`: re-sending the saved values, turning the schedule **off**, deactivating, or
   changing the cadence of a schedule that is (and stays) off.
 
+  **Who signs the save (org keys).** Whoever saves a squad or automation **signs** it: a run
+  with no person behind it (schedule, agent trigger) reads sources that are in "each person's
+  login" mode with the signer's login. With an **organization key** (no person), creating or
+  changing agents, steps, sources, destinations or schedule (`create_squad`, `update_squad`,
+  `update_squad_step`, `create_automation`, `update_automation`) is accepted **only when every
+  source the resulting configuration reaches uses a service account** — then the
+  **organization** signs (with the key's id; nobody's login is lent to the run). If any source
+  reaches "each person's login", or AFL cannot confirm the mode (a referenced agent, source,
+  automation or squad not found, unreadable connection mode), it comes back **422
+  `EDICAO_SEM_PESSOA`** naming the source(s), and nothing is saved: save it in the AFL UI or
+  with a personal key. Renaming or toggling never needs this. If a connection is later switched
+  to "each person's login", an org-signed configuration does **not** borrow anyone's login: the
+  run refuses that source (`sem_login_criador`) until a person re-saves it.
+
   **Editing one: two tools, and picking the wrong one is how instructions get erased.**
   **`mcp__afl__update_squad_step`** (`squads:write`) is the tool for anything *inside* a
   step, and it is what you should reach for by default. **`mcp__afl__update_squad`**

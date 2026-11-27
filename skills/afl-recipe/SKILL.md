@@ -44,6 +44,7 @@ judges and writes.
 | Field | Meaning |
 |---|---|
 | `agentId` | Carrier agent. Sources, credential and organization come from it. Same org as the squad, and reachable by whoever triggers it. |
+| `blocks` | Optional `{ "<name>": "<text>" }`: reusable text (e.g. SQL CTEs) cited as `{{block.<name>}}` inside `query`/`jql`. See [Blocks](#blocks). |
 | `inputs[]` | `{ name, from, type, optional? }`. `from` is `trigger.<field>` or `steps.<stepKey>.vars.<name>` (the step must be an **ancestor**). |
 | `calls[]` | Ordered `{ key, tool, params, when?, parallelGroup?, allowEmpty?, timeoutSeconds?, maxRows?, stop?, set? }`. |
 | `set[]` | After all calls: `{ name, from, type, when? }`. |
@@ -88,6 +89,33 @@ a result goes back through the same gate before reaching the next query.
 must use the literal function; the plain slot is rejected on save.** `integer`, `date`, `month` and
 word-only `enum` may enter raw. A call's result never enters a query directly: extract it with `set`
 and a type. Slots that are not declared before use reject the save.
+
+### Blocks
+
+When several calls repeat the same text (the CTEs of a sales base, a monthly series), declare it
+once in `blocks` and cite it with `{{block.<name>}}` inside a SQL or JQL param (`query`, `jql`).
+
+- Name: `^[a-z][a-z0-9_]{0,39}$`. Up to 20 blocks, 20,000 characters each.
+- A block may hold the same slots a param holds (`{{input.x}}`, `{{vars.X}}`,
+  `{{sql_literal(...)}}`). It is expanded **before** the slots, so every rule applies to the
+  expanded text exactly as if it were written in the param: the literal rule (judged by the
+  language of the param that cites it), the scope of `vars`, and the 40,000-character param cap,
+  **measured after expansion**.
+- A block never cites another block. A cited block that is not declared, and a declared block that
+  no param cites, both reject the save.
+- `{{block.x}}` anywhere else (texts, `when`, non-language params) is rejected.
+- No flag: a recipe without `blocks` behaves exactly as before.
+
+```json
+"blocks": {
+  "r": "WITH r AS (SELECT * FROM silver.vendas WHERE produtor = {{vars.PRODUTOR}} AND mes BETWEEN {{sql_literal(vars.M_INI)}} AND {{sql_literal(vars.M_FIM)}})",
+  "vw": "vw AS (SELECT mes, SUM(valor) AS total FROM r GROUP BY mes)"
+},
+"calls": [
+  { "key": "serie", "tool": "datasource_databricks", "params": { "name": "Tecnologia", "query": "{{block.r}}, {{block.vw}} SELECT * FROM vw ORDER BY mes" } },
+  { "key": "total", "tool": "datasource_databricks", "params": { "name": "Tecnologia", "query": "{{block.r}} SELECT COUNT(*) AS n, SUM(valor) AS total FROM r" } }
+]
+```
 
 ### `when`
 
@@ -207,6 +235,9 @@ zero, and a declared failure comes back as `FALHA:` with the `RESUMO_APP` line.
 | `não é ancestral deste` | The source step needs a path of edges to this one. |
 | `regex precisa ser ancorada` | Start with `^` and end with `$`. |
 | `grupo quantificado` / `quantificadores demais` | Regexes run synchronously: no quantified group holding `|` or another quantifier, at most 8 quantifiers (3 ranges), and text up to 256 characters. |
+| `cita um bloco não declarado` / `declarado e nunca citado` | Declare the block in `blocks`, or remove the unused one. |
+| `depois de expandir os blocos` | The param passed 40,000 characters once the blocks were expanded: move work into fewer, larger CTEs or split the call. |
+| `só vale em parâmetro de SQL ou JQL` | `{{block.x}}` only works inside `query`/`jql`. |
 | `não é permitida em receita` | It is a write or outside the list. Use an agent step. |
 | `tool_not_in_agent` / `source_not_in_agent` at run time | Connect the source to the carrier agent. |
 | `trouxe resultado TRUNCADO` | Aggregate in the query or raise `maxRows`. A recipe does not conclude on partial data. |
