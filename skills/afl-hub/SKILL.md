@@ -1413,8 +1413,17 @@ lacks it — surface verbatim):
   which is how you find the id of a squad you just created. **`mcp__afl__create_squad`**
   (scope `squads:write`) creates a squad (DAG of steps): pass `name`, `steps[]` and
   `edges[]` — build steps from `list_agents` (agent-type step `config: { agentId }`).
-  A step's `type` is one of **six** (the sixth, `recipe`, is a deterministic read-only step with no
-  LLM, behind `SQUAD_RECIPE_STEPS`; its contract is in the **`afl-recipe`** skill), and each one needs a **different `config`** —
+  A step's `type` is one of **seven** (the sixth, `recipe`, is a deterministic read-only step with no
+  LLM, behind `SQUAD_RECIPE_STEPS`; its contract is in the **`afl-recipe`** skill; the seventh, **`check`**,
+  is a deterministic CHECK of an earlier step's output, no LLM, behind `SQUAD_OUTPUT_CHECK_STEPS`:
+  `{ subject: { step, format: "json"|"text" }, sources?: [{ name, step, format }], rules: [...], maxLoops? }`
+  with CLOSED rule kinds `json_schema`, `count`, `forbidden_terms`, `forbidden_patterns`
+  (`email`/`cpf`/`cnpj`/`phone_br` only — no free regex), `numbers_grounded` (every pt-BR number —
+  R$, %, p.p., 2,4x, 12.480, mil/mi/bi — must exist in an allowed source, 0.5% tolerance; years don't
+  count) and `refs_exist`; `subject`/`sources` must be EARLIER steps. Approved → the run goes on and the
+  next steps get the checked output too; rejected → with an `onOutcome: "rejected"` edge back to the
+  author and `maxLoops` 1..5 the author redoes it with the reasons in its prompt, otherwise the step
+  fails; the reasons are in `output.outputCheck` of `get_squad_run`), and each one needs a **different `config`** —
   an incomplete `config` fails the whole DAG, so get it right up front:
   `agent` → `{ agentId, instructions?, readOnly?, failureMarker?, pageConformance? }` ·
   `automation` → `{ automationId }` ·
