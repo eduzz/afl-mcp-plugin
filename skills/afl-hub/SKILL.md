@@ -2065,6 +2065,14 @@ lacks it — surface verbatim):
   analysis happened and nothing was charged. When all the rows are like that, the last real
   execution comes at the end of the list (and it is older than the ones before it). Report
   "no new data since <that run>", not "it stopped working".
+  `skipReason: "credential_unavailable"` means the connection's credential could not be
+  obtained at that moment (auth service or provider down): nothing was read or charged,
+  and the next run tries again. Report it as a passing outage, not a broken automation.
+  On a failed or partial run, `errorCode` names the cause: `outlook_folder_missing` (the
+  source's Outlook folder is gone — edit the source), `ai_model_credential_refused` (the
+  AI provider rejected the agent's model credential — check the agent's model or the
+  provider key), `sources_partially_read` (status `partial`: the sources in
+  `errorParams.dataSourceIds` were not read and the analysis ran with the others).
 
   **`list_automation_runs` is the cross-automation history, with filters** (`status`,
   `from`/`to` ISO 8601 — `to` exclusive —, `origin` = `scheduled`|`manual`|`squad`,
@@ -2114,8 +2122,7 @@ above.
 - **`mcp__afl__start_architect_run`** `{ prompt, organization_id?, teto_usd?, motor? }`
   (`agents:write`) → `{ runId, estado, url, proximoPasso }`. The run is **asynchronous and
   durable** (legs on a queue); the call returns at once. No `organization_id` = the token's
-  org; personal token = personal scope. `teto_usd` defaults to 3, max 10. It may be refused
-  while the architect is not enabled for the account (`ARCHITECT_RUNTIME`). `motor`:
+  org; personal token = personal scope. `teto_usd` defaults to 3, max 10. `motor`:
   `"plataforma"` (default — the platform's architect reasons, the loop below) or `"cliente"`
   (YOU reason through the `architect_*` tools and the platform calls no model — follow the
   **`afl-architect`** skill).
@@ -2498,8 +2505,12 @@ CRUD of the user's own agents and skills — separate from `chat_with_agent` (wh
       member, who only sees the centers that **apply to them** — a member does not enumerate
       other people's budgets. `administrators[]` ships in both cases: that is who to ask.
     - **The hub does not administer budget** (security decision — that stays outside the
-      agent channel). `costCenters.manageAt` is the AFL interface path where a ceiling is
-      changed; there is no tool for it and there will not be one.
+      agent channel). `costCenters.manageAt` (and every `manageAt`/`seeAt` inside
+      `personalLimits`, `organizationLimit` and the sponsorship entries) is the **ready URL**
+      of the AFL screen where a ceiling is changed — or its consumption read — already on the
+      environment's host: hand it to the person as is, never rebuild the host. Only when the
+      server has no configured frontend base does it come as a bare path (`/…`). There is no
+      tool for changing a ceiling and there will not be one.
     - `enforced: false` means "no limits row" — the center **blocks nothing**, it is not a
       zero ceiling. A configured ceiling that diverges from the enforced one shows up in
       `warnings`. If the budget read itself fails, `costCenters.unavailable` says so and the
@@ -3024,7 +3035,7 @@ returns it, and the `integrationUuid` it gives you is *literally* the value
   `notion_page`, `notion_database`, `slack_channel`, `slack_data`, `databricks_table`,
   `databricks_genie`, `github_repo`, `api_endpoint`, `webhook`, `database_table`,
   `web_scraping`, `mcp_server`, `hubspot_data`, `linkedin_data`, `microsoft_365_data`,
-  `tuya_devices`, `whatsapp_data`, `jira_data`, `education_platform`, `meta_ads_data`, `basecamp_data`.
+  `whatsapp_data`, `jira_data`, `education_platform`, `meta_ads_data`, `basecamp_data`.
   Aliases (`jira`,
   `notion`, `databricks`, `postgres`, `sqlserver`, `sheets`, `mcp`, …) are normalized, and an
   unrecognized type is **refused listing the valid ones** rather than silently accepted.
